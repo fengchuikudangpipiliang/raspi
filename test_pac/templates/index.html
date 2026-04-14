@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head>
+    {{ bootstrap.load_css() }}
+    <title>我的树莓派项目</title>
+</head>
+<body>
+    <div class="container mt-5">
+        <h1>欢迎, {{ user.name }}!</h1>
+        <p>状态: {{ user.status }}</p>
+        <a href="/logs" class="btn btn-primary">查看日志</a>
+    </div>
+    {{ bootstrap.load_js() }}
+</body>
+</html>

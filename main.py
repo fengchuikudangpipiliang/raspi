@@ -1,5 +1,9 @@
+from scripts.database.sqlite_db import init_db
+
+
 def main():
-    print("Hello from face3!")
+    init_db()
+    print("sqlite ready")
 
 
 if __name__ == "__main__":

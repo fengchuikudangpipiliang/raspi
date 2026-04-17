@@ -1,0 +1,8 @@
+Table: sqlite_sequence
++--------------------+-----+
+| name               | seq |
++--------------------+-----+
+| users              | 1   |
+| face_profiles      | 1   |
+| attendance_records | 1   |
++--------------------+-----+

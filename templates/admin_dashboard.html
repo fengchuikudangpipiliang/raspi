@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+
+{# 后台页使用另一套背景和整体配色。 #}
+{% block body_class %}admin-body{% endblock %}
+
+{% block content %}
+<main class="admin-shell">
+    <div class="container-fluid px-3 px-lg-4 py-4">
+        {# 顶部头部：页面标题 + 常用动作按钮。 #}
+        <div class="dashboard-header mb-4">
+            <div>
+                <div class="eyebrow">Admin Console</div>
+                <h1 class="display-6 fw-bold mb-2">人脸考勤管理后台</h1>
+                <p class="hero-copy mb-0">查看在册用户、今日考勤、设备运行与异常提醒。当前界面为前端原型展示。</p>
+            </div>
+            <div class="header-actions">
+                <a class="btn btn-light btn-soft" href="/">
+                    <i class="bi bi-display"></i>
+                    前往终端页
+                </a>
+                <button class="btn btn-warning btn-soft" type="button">
+                    <i class="bi bi-download"></i>
+                    导出日报
+                </button>
+            </div>
+        </div>
+
+        {# 第一屏统计卡片，适合放最重要的概览数字。 #}
+        <section class="row g-3 g-lg-4 mb-4">
+            {% for item in data.overview %}
+            <div class="col-sm-6 col-xxl-3">
+                <div class="metric-card h-100">
+                    <span class="metric-label">{{ item.label }}</span>
+                    <strong class="metric-value">{{ item.value }}</strong>
+                    <span class="metric-delta">{{ item.delta }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </section>
+
+        <div class="row g-4">
+            <div class="col-12 col-xl-8">
+                <div class="row g-4">
+                    <div class="col-12">
+                        {# 左上主表格：后续可直接接真实 attendance_records 数据。 #}
+                        <section class="panel-card">
+                            <div class="panel-head">
+                                <div>
+                                    <h2>今日考勤动态</h2>
+                                    <p>用于展示实时打卡状态与异常记录。</p>
+                                </div>
+                                <span class="panel-chip">最新 5 条</span>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="table table-dark table-borderless align-middle mb-0 dashboard-table">
+                                    <thead>
+                                        <tr>
+                                            <th>时间</th>
+                                            <th>姓名</th>
+                                            <th>编号</th>
+                                            <th>结果</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for item in data.today_attendance %}
+                                        <tr>
+                                            <td>{{ item.time }}</td>
+                                            <td>{{ item.name }}</td>
+                                            <td>{{ item.code }}</td>
+                                            <td><span class="badge text-bg-{{ item.badge }}">{{ item.result }}</span></td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </section>
+                    </div>
+
+                    <div class="col-lg-6">
+                        {# 左下第一块：按角色或用户分组展示统计。 #}
+                        <section class="panel-card h-100">
+                            <div class="panel-head">
+                                <div>
+                                    <h2>用户等级概览</h2>
+                                    <p>预留给角色、班级、部门统计。</p>
+                                </div>
+                            </div>
+                            <div class="d-grid gap-3">
+                                {% for item in data.user_levels %}
+                                <div class="roster-item">
+                                    <div>
+                                        <strong>{{ item.name }}</strong>
+                                        <p class="mb-0">当前在册 {{ item.count }} 人</p>
+                                    </div>
+                                    <span class="badge text-bg-{{ item.color }}">{{ item.count }}</span>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </section>
+                    </div>
+
+                    <div class="col-lg-6">
+                        {# 左下第二块：展示异常和需要管理员介入的事件。 #}
+                        <section class="panel-card h-100">
+                            <div class="panel-head">
+                                <div>
+                                    <h2>异常提醒</h2>
+                                    <p>预留给识别失败、设备告警、人工审核。</p>
+                                </div>
+                            </div>
+                            <div class="d-grid gap-3">
+                                {% for item in data.alerts %}
+                                <div class="alert-tile">
+                                    <i class="bi bi-exclamation-diamond"></i>
+                                    <span>{{ item }}</span>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12 col-xl-4">
+                <div class="d-grid gap-4">
+                    {# 右侧上方：展示每个终端的运行情况。 #}
+                    <section class="panel-card">
+                        <div class="panel-head">
+                            <div>
+                                <h2>终端设备状态</h2>
+                                <p>用于展示树莓派节点运行状态。</p>
+                            </div>
+                        </div>
+                        <div class="d-grid gap-3">
+                            {% for item in data.devices %}
+                            <div class="device-card">
+                                <div class="d-flex justify-content-between align-items-start gap-3">
+                                    <div>
+                                        <strong>{{ item.name }}</strong>
+                                        <p class="mb-0">{{ item.detail }}</p>
+                                    </div>
+                                    <span class="status-pill {% if item.status == '告警' %}warning{% else %}ok{% endif %}">{{ item.status }}</span>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </section>
+
+                    {# 右侧下方：把未来常用功能预留成快捷入口。 #}
+                    <section class="panel-card">
+                        <div class="panel-head">
+                            <div>
+                                <h2>快速入口</h2>
+                                <p>前端占位，后续可接实际功能。</p>
+                            </div>
+                        </div>
+                        <div class="quick-grid">
+                            <button class="quick-link" type="button"><i class="bi bi-person-plus"></i><span>新增用户</span></button>
+                            <button class="quick-link" type="button"><i class="bi bi-camera"></i><span>录入人脸</span></button>
+                            <button class="quick-link" type="button"><i class="bi bi-calendar-week"></i><span>考勤报表</span></button>
+                            <button class="quick-link" type="button"><i class="bi bi-router"></i><span>终端巡检</span></button>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </div>
+    </div>
+</main>
+{% endblock %}

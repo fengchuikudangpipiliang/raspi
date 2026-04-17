@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- page_title 由具体页面传进来，这样每个页面都能改自己的标题。 -->
+    <title>{{ page_title }} | face3</title>
+    <!-- 这些资源都改为本地静态文件，避免页面每次依赖外网。 -->
+    <link href="{{ url_for('static', path='/vendor/fonts/fonts.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', path='/vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', path='/vendor/bootstrap-icons/font/bootstrap-icons.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', path='/css/site.css') }}" rel="stylesheet">
+</head>
+<body class="{% block body_class %}{% endblock %}">
+    <!-- 子页面把自己的主体内容填到这里。 -->
+    {% block content %}{% endblock %}
+    <!-- Bootstrap 的交互组件依赖这个 js。 -->
+    <script src="{{ url_for('static', path='/vendor/bootstrap/js/bootstrap.bundle.min.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,55 @@
+@font-face {
+    font-family: "Barlow";
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url("/static/vendor/fonts/barlow-500.ttf") format("truetype");
+}
+
+@font-face {
+    font-family: "Barlow";
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url("/static/vendor/fonts/barlow-600.ttf") format("truetype");
+}
+
+@font-face {
+    font-family: "Barlow";
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url("/static/vendor/fonts/barlow-700.ttf") format("truetype");
+}
+
+@font-face {
+    font-family: "Noto Sans SC";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("/static/vendor/fonts/noto-sans-sc-400.ttf") format("truetype");
+}
+
+@font-face {
+    font-family: "Noto Sans SC";
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url("/static/vendor/fonts/noto-sans-sc-500.ttf") format("truetype");
+}
+
+@font-face {
+    font-family: "Noto Sans SC";
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url("/static/vendor/fonts/noto-sans-sc-600.ttf") format("truetype");
+}
+
+@font-face {
+    font-family: "Noto Sans SC";
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url("/static/vendor/fonts/noto-sans-sc-700.ttf") format("truetype");
+}

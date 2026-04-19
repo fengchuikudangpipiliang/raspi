@@ -82,7 +82,7 @@ def save_submission(
     """
     保存一次用户提交。
     每次提交都会创建独立目录，目录里同时保存图片文件和 metadata.json，便于后续追踪和调试。
-    当前注册照只来自后端冻结的可信帧，不再接受前端直接指定最终图片。
+    当前注册照只来自后端冻结的可信抓拍，不再接受前端直接指定最终图片。
     """
     submission_id = datetime.now().strftime("%Y%m%d%H%M%S") + "-" + uuid4().hex[:8]
     submission_dir = DATA_DIR / submission_id
@@ -133,7 +133,7 @@ def validate_payload(payload: dict) -> dict:
 
     challenge_id = sanitize_text(payload.get("challenge_id", ""), 64)
     if not challenge_id:
-        raise ValueError("请先完成眨眼活体挑战。")
+        raise ValueError("请先完成动作活体挑战。")
 
     if not payload.get("consent"):
         raise ValueError("请先勾选授权说明后再提交。")
@@ -184,7 +184,7 @@ async def create_submission(request: Request):
             return JSONResponse(
                 {
                     "ok": False,
-                    "message": "照片未通过质量校验，请重新开始眨眼验证后再提交。",
+                    "message": "照片未通过质量校验，请重新开始动作挑战后再提交。",
                     "require_new_challenge": True,
                     "validation_results": validation_payload,
                 },
@@ -194,7 +194,8 @@ async def create_submission(request: Request):
         liveness_payload = {
             "challenge_id": trusted_capture.challenge_id,
             "state": trusted_capture.state,
-            "capture_source": "same_stream_frozen_frame",
+            "capture_source": "step_action_trusted_capture",
+            "steps": trusted_capture.steps_payload,
         }
         metadata = save_submission(payload, image_bytes, image_type, validation_payload, liveness_payload)
         liveness_service.consume_challenge(payload["challenge_id"])
@@ -218,36 +219,36 @@ async def create_submission(request: Request):
 @app.post("/api/liveness/challenges")
 async def create_liveness_challenge():
     """
-    创建一次新的眨眼活体挑战。
+    创建一次新的动作活体挑战。
     前端每次开始验证前都要先拿一个新的 challenge_id。
     """
     result = liveness_service.create_challenge()
     return JSONResponse({"ok": True, **liveness_service.result_to_dict(result)})
 
 
-@app.post("/api/liveness/challenges/{challenge_id}/frames")
-async def analyze_liveness_frame(challenge_id: str, request: Request):
+@app.post("/api/liveness/challenges/{challenge_id}/captures")
+async def analyze_liveness_capture(challenge_id: str, request: Request):
     """
-    接收前端送来的连续视频帧并推进眨眼状态机。
-    这里不负责最终注册提交，只负责活体挑战本身。
+    接收前端当前步骤的抓拍图并推进动作挑战状态机。
+    这里不负责最终注册提交，只负责动作挑战本身。
     """
     try:
         payload = await request.json()
         if not isinstance(payload, dict):
-            raise ValueError("帧数据格式错误。")
+            raise ValueError("抓拍数据格式错误。")
 
         image_data = payload.get("image_data", "")
         if not image_data:
-            raise ValueError("缺少视频帧数据。")
+            raise ValueError("缺少抓拍图片数据。")
 
         image_bytes, image_type = decode_image_data(image_data)
-        result = liveness_service.analyze_frame(challenge_id, image_bytes, image_type)
+        result = liveness_service.analyze_capture(challenge_id, image_bytes, image_type)
         status_code = 200 if result.code not in {"challenge_missing", "challenge_expired", "challenge_consumed"} else 400
         return JSONResponse({"ok": status_code == 200, **liveness_service.result_to_dict(result)}, status_code=status_code)
     except ValueError as error:
         return JSONResponse({"ok": False, "message": str(error)}, status_code=400)
     except Exception:
         return JSONResponse(
-            {"ok": False, "message": "活体检测暂时不可用，请稍后重试。"},
+            {"ok": False, "message": "动作挑战暂时不可用，请稍后重试。"},
             status_code=500,
         )

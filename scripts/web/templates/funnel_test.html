@@ -202,6 +202,40 @@
             margin-top: 18px;
         }
 
+        .capture-workbench {
+            display: grid;
+            gap: 0;
+        }
+
+        .capture-workbench-body {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 0;
+        }
+
+        .capture-sidebar {
+            display: grid;
+            gap: 18px;
+            padding: 18px;
+            border-top: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .capture-sidebar-block {
+            display: grid;
+            gap: 12px;
+        }
+
+        .capture-sidebar-title {
+            margin: 0;
+            font-size: 20px;
+        }
+
+        .capture-helper {
+            color: var(--muted);
+            line-height: 1.7;
+        }
+
         .preview-head {
             display: flex;
             justify-content: space-between;
@@ -212,7 +246,7 @@
 
         .preview-stage {
             position: relative;
-            min-height: 340px;
+            min-height: clamp(240px, 40vh, 420px);
             display: grid;
             place-items: center;
             background:
@@ -226,6 +260,12 @@
             width: 100%;
             height: 100%;
             object-fit: cover;
+        }
+
+        #camera_video {
+            /* 前置摄像头在部分设备上默认表现为镜像预览。
+               这里对页面上的实时视频做水平翻转校正，保证用户看到的方向正常。 */
+            transform: scaleX(-1);
         }
 
         .preview-empty {
@@ -297,6 +337,13 @@
             margin-top: 10px;
             color: var(--muted);
             font-size: 14px;
+        }
+
+        .challenge-action {
+            width: 100%;
+            justify-content: center;
+            padding-block: 12px;
+            font-size: 16px;
         }
 
         .validation-list {
@@ -375,8 +422,8 @@
 
         .liveness-panel {
             display: grid;
-            gap: 12px;
-            padding: 18px;
+            gap: 10px;
+            padding: 16px;
         }
 
         .liveness-panel strong {
@@ -386,6 +433,64 @@
         .liveness-meta {
             color: var(--muted);
             font-size: 14px;
+        }
+
+        .step-list {
+            display: grid;
+            gap: 10px;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .step-item {
+            padding: 12px;
+            border-radius: 14px;
+            border: 1px solid var(--line);
+            background: var(--panel-soft);
+        }
+
+        .step-item.active {
+            border-color: rgba(84, 243, 255, 0.24);
+            background: rgba(84, 243, 255, 0.08);
+        }
+
+        .step-item.completed {
+            border-color: rgba(108, 231, 178, 0.24);
+            background: rgba(108, 231, 178, 0.08);
+        }
+
+        .step-item-title {
+            margin-bottom: 4px;
+            font-weight: 700;
+            font-size: 15px;
+        }
+
+        .step-item-copy {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .compact-status {
+            display: grid;
+            gap: 8px;
+        }
+
+        .compact-status-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .compact-status-text {
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .single-screen-note {
+            color: var(--muted);
+            font-size: 13px;
         }
 
         .hidden {
@@ -416,6 +521,10 @@
             .preview-stage {
                 min-height: 280px;
             }
+
+            .step-list {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
@@ -424,13 +533,13 @@
         <section class="hero">
             <div class="eyebrow">Face3 Public Registration</div>
             <h1>提交人脸资料</h1>
-            <p>这是一个模拟真实应用的人脸资料提交页面。当前入口只允许浏览器摄像头现场采集，后续会在这条链路上继续叠加活体挑战和更严格的注册约束。</p>
+            <p>这是一个模拟真实应用的人脸资料提交页面。当前入口只允许浏览器摄像头现场采集，并改为低流量分步动作挑战，避免连续送视频帧带来的高延迟和高失败率。</p>
         </section>
 
         <section class="content">
             <section class="panel">
                 <h2>用户信息</h2>
-                <p class="panel-copy">请先填写基础信息，然后开启摄像头现场拍照。系统会在提交前进行质量校验，后续还会把活体挑战接到同一条采集链路里。</p>
+                <p class="panel-copy">请先填写基础信息，然后开启摄像头。系统会引导你按步骤完成动作抓拍，并在提交前继续做质量校验。</p>
 
                 <form id="registration-form">
                     <div class="field-grid">
@@ -457,52 +566,54 @@
                         <textarea id="notes" name="notes" maxlength="200" placeholder="可填写班级、部门、注册原因等补充信息"></textarea>
                     </div>
 
-                    <div class="source-grid">
-                        <div class="source-card">
-                            <h3>摄像头现场采集</h3>
-                            <p>浏览器会先申请摄像头权限。当前流程不再提供“手动拍照”入口，而是要求你完成一次眨眼挑战，然后系统直接从同一段视频流里冻结最终注册照。</p>
-                            <div class="source-actions">
-                                <button class="button warning" type="button" id="start_camera_button">开启摄像头</button>
-                                <button class="button secondary" type="button" id="start_challenge_button" disabled>开始眨眼验证</button>
-                                <button class="button secondary" type="button" id="clear_preview_button">清空当前照片</button>
-                                <button class="button secondary" type="button" id="stop_camera_button" disabled>关闭摄像头</button>
-                            </div>
-                            <div class="helper">如果浏览器拒绝权限，请检查浏览器设置或系统相机权限。</div>
-                        </div>
-                    </div>
-
-                    <section class="preview-card">
+                    <section class="preview-card capture-workbench">
                         <div class="preview-head">
-                            <strong>照片预览</strong>
+                            <strong>摄像头现场采集</strong>
                             <span id="preview_mode_label">当前未选择照片</span>
                         </div>
-                        <div class="preview-stage" id="preview_stage">
-                            <div class="preview-empty" id="preview_empty">
-                                请先开启摄像头并完成一次眨眼验证。
+                        <div class="capture-workbench-body">
+                            <div class="preview-stage" id="preview_stage">
+                                <div class="preview-empty" id="preview_empty">
+                                    请先开启摄像头并完成一次动作挑战。
+                                </div>
+                                <video id="camera_video" class="hidden" autoplay playsinline muted></video>
+                                <img id="preview_image" class="hidden" alt="人脸照片预览">
+                                <canvas id="capture_canvas" class="hidden"></canvas>
                             </div>
-                            <video id="camera_video" class="hidden" autoplay playsinline muted></video>
-                            <img id="preview_image" class="hidden" alt="人脸照片预览">
-                            <canvas id="capture_canvas" class="hidden"></canvas>
+                            <section class="capture-sidebar">
+                                <section class="capture-sidebar-block">
+                                    <h3 class="capture-sidebar-title">动作挑战</h3>
+                                    <p class="capture-helper">保持画面里的自己位置不变，按提示完成动作后，直接点击下面的按钮抓拍当前步骤。</p>
+                                    <div class="source-actions">
+                                        <button class="button warning" type="button" id="start_camera_button">开启摄像头</button>
+                                        <button class="button secondary" type="button" id="start_challenge_button" disabled>开始动作挑战</button>
+                                        <button class="button secondary" type="button" id="stop_camera_button" disabled>关闭摄像头</button>
+                                        <button class="button secondary" type="button" id="clear_preview_button">清空当前照片</button>
+                                    </div>
+                                    <div class="single-screen-note">如果浏览器拒绝权限，请检查浏览器设置或系统相机权限。</div>
+                                </section>
+
+                                <section class="capture-sidebar-block">
+                                    <button class="button challenge-action" type="button" id="capture_step_button" disabled>拍摄当前步骤</button>
+                                </section>
+
+                                <section class="capture-sidebar-block compact-status">
+                                    <div class="compact-status-head">
+                                        <strong>当前步骤</strong>
+                                        <span class="status-chip pending" id="liveness_badge">未开始</span>
+                                    </div>
+                                    <div><strong id="liveness_message">请先开启摄像头，然后开始动作挑战。</strong></div>
+                                    <div class="compact-status-text" id="liveness_meta">当前还没有活体挑战数据。</div>
+                                </section>
+
+                                <section class="capture-sidebar-block">
+                                    <div class="step-list" id="challenge_steps">
+                                        <div class="preview-empty" id="challenge_steps_empty">动作步骤会在开始挑战后显示在这里。</div>
+                                    </div>
+                                </section>
+                            </section>
                         </div>
                     </section>
-
-                    <section class="preview-card">
-                        <div class="preview-head">
-                            <strong>活体挑战状态</strong>
-                            <span class="status-chip pending" id="liveness_badge">未开始</span>
-                        </div>
-                        <div class="liveness-panel">
-                            <div><strong id="liveness_message">请先开启摄像头，然后开始眨眼验证。</strong></div>
-                            <div class="liveness-meta" id="liveness_meta">当前还没有活体挑战数据。</div>
-                        </div>
-                    </section>
-
-                    <label class="consent">
-                        <input type="checkbox" id="consent" name="consent">
-                        <span>我已知晓该照片将用于人脸识别考勤注册，并同意管理员在审核通过前暂存我的照片和基础资料。</span>
-                    </label>
-
-                    <div class="message" id="message_box"></div>
 
                     <section class="preview-card">
                         <div class="preview-head">
@@ -515,6 +626,13 @@
                             </div>
                         </div>
                     </section>
+
+                    <label class="consent">
+                        <input type="checkbox" id="consent" name="consent">
+                        <span>我已知晓该照片将用于人脸识别考勤注册，并同意管理员在审核通过前暂存我的照片和基础资料。</span>
+                    </label>
+
+                    <div class="message" id="message_box"></div>
 
                     <div class="footer-actions">
                         <button class="button" type="submit" id="submit_button" disabled>提交资料</button>
@@ -532,15 +650,15 @@
                     </div>
                     <div class="tip-card">
                         <strong>推荐流程</strong>
-                        <p>先开启摄像头，再完成一次自然眨眼。系统会直接从同一段视频流里冻结最终注册照，然后你再提交资料。</p>
+                        <p>先开启摄像头，再按步骤完成动作抓拍。系统会从通过挑战的抓拍里挑出可信注册照，然后你再提交资料。</p>
                     </div>
                     <div class="tip-card">
                         <strong>防御性校验</strong>
-                        <p>系统会校验姓名、学号/工号、授权勾选，并对活体视频流和最终注册照分别做后端检测，避免“先眨眼，再换照片”的绕过方式。</p>
+                        <p>系统会校验姓名、学号/工号、授权勾选，并对动作步骤、同人一致性和最终注册照分别做后端检测，避免“先过动作再换照片”的绕过方式。</p>
                     </div>
                     <div class="tip-card">
                         <strong>当前阶段</strong>
-                        <p>这一步先完成公网资料入口和质量校验流水线，下一步会把“连续眨眼活体”和“最终注册照绑定”串起来。</p>
+                        <p>这一步先完成公网资料入口和低流量动作挑战，下一步会把同样的动作挑战思路迁移到树莓派本地考勤端。</p>
                     </div>
                 </div>
             </aside>
@@ -548,12 +666,13 @@
     </main>
 
     <script>
-        // 这个脚本负责“开启摄像头 -> 眨眼挑战 -> 自动冻结注册照 -> 提交资料”的完整前端状态流。
-        // 最终注册照不再由前端自由指定，而是由后端基于 challenge_id 固定取图。
+        // 这个脚本负责“开启摄像头 -> 分步动作挑战 -> 自动冻结注册照 -> 提交资料”的完整前端状态流。
+        // 整条链路只上传少量抓拍图，不再持续送视频帧，以降低移动端和树莓派侧压力。
         const form = document.getElementById("registration-form");
         const clearPreviewButton = document.getElementById("clear_preview_button");
         const startCameraButton = document.getElementById("start_camera_button");
         const startChallengeButton = document.getElementById("start_challenge_button");
+        const captureStepButton = document.getElementById("capture_step_button");
         const stopCameraButton = document.getElementById("stop_camera_button");
         const previewModeLabel = document.getElementById("preview_mode_label");
         const previewEmpty = document.getElementById("preview_empty");
@@ -568,13 +687,14 @@
         const livenessBadge = document.getElementById("liveness_badge");
         const livenessMessage = document.getElementById("liveness_message");
         const livenessMeta = document.getElementById("liveness_meta");
+        const challengeSteps = document.getElementById("challenge_steps");
+        const challengeStepsEmpty = document.getElementById("challenge_steps_empty");
 
         let previewData = "";
         let stream = null;
         let currentChallengeId = "";
         let trustedChallengeId = "";
-        let livenessLoopTimer = null;
-        let livenessInFlight = false;
+        let challengeSubmitting = false;
 
         function showMessage(text, type) {
             messageBox.textContent = text;
@@ -649,17 +769,29 @@
             livenessMeta.textContent = metaText;
         }
 
-        function clearLivenessStatus() {
-            setLivenessStatus("未开始", "pending", "请先开启摄像头，然后开始眨眼验证。", "当前还没有活体挑战数据。");
+        function renderChallengeSteps(steps) {
+            challengeSteps.innerHTML = "";
+            if (!steps || !steps.length) {
+                challengeSteps.appendChild(challengeStepsEmpty);
+                challengeStepsEmpty.classList.remove("hidden");
+                return;
+            }
+
+            challengeStepsEmpty.classList.add("hidden");
+            steps.forEach((step) => {
+                const item = document.createElement("div");
+                item.className = `step-item ${step.status}`;
+                item.innerHTML = `
+                    <div class="step-item-title">第 ${step.index} 步 · ${step.title}</div>
+                    <div class="step-item-copy">${step.instruction}</div>
+                `;
+                challengeSteps.appendChild(item);
+            });
         }
 
-        function stopLivenessLoop() {
-            if (livenessLoopTimer) {
-                clearInterval(livenessLoopTimer);
-                livenessLoopTimer = null;
-            }
-            livenessInFlight = false;
-            currentChallengeId = "";
+        function clearLivenessStatus() {
+            setLivenessStatus("未开始", "pending", "请先开启摄像头，然后开始动作挑战。", "当前还没有活体挑战数据。");
+            renderChallengeSteps([]);
         }
 
         function closeCameraStream() {
@@ -672,6 +804,7 @@
             stopCameraButton.disabled = true;
             startCameraButton.disabled = false;
             startChallengeButton.disabled = true;
+            captureStepButton.disabled = true;
         }
 
         function resetTrustedCapture() {
@@ -684,8 +817,14 @@
             submitButton.disabled = true;
         }
 
+        function resetChallengeState() {
+            currentChallengeId = "";
+            challengeSubmitting = false;
+            captureStepButton.disabled = true;
+        }
+
         function stopCamera() {
-            stopLivenessLoop();
+            resetChallengeState();
             closeCameraStream();
             resetTrustedCapture();
             clearLivenessStatus();
@@ -696,70 +835,85 @@
                 throw new Error("摄像头尚未准备好，请稍后重试。");
             }
 
-            // 活体阶段不需要高分辨率，降低到更小尺寸能明显减少后端人脸检测耗时。
-            const maxWidth = 360;
+            // 分步动作挑战每次只上传一张抓拍图，因此可以适度保留更多细节，
+            // 兼顾低流量和后端质量校验所需的清晰度。
+            const maxWidth = 480;
             const scale = Math.min(1, maxWidth / cameraVideo.videoWidth);
             captureCanvas.width = Math.max(1, Math.round(cameraVideo.videoWidth * scale));
             captureCanvas.height = Math.max(1, Math.round(cameraVideo.videoHeight * scale));
             const context = captureCanvas.getContext("2d");
+            // 前置摄像头在部分设备上会输出镜像画面。
+            // 这里在抓拍落盘前统一做一次水平翻转校正，避免提交到后端的注册照左右颠倒。
+            context.save();
+            context.clearRect(0, 0, captureCanvas.width, captureCanvas.height);
+            context.translate(captureCanvas.width, 0);
+            context.scale(-1, 1);
             context.drawImage(cameraVideo, 0, 0, captureCanvas.width, captureCanvas.height);
-            return captureCanvas.toDataURL("image/jpeg", 0.76);
+            context.restore();
+            return captureCanvas.toDataURL("image/jpeg", 0.82);
         }
 
         function describeState(result) {
             const labelMap = {
-                waiting_open_eye: "等待睁眼",
-                waiting_blink: "等待眨眼",
-                waiting_reopen: "等待重睁",
+                waiting_capture: "等待抓拍",
                 passed: "验证通过",
                 expired: "已超时",
             };
             return labelMap[result.state] || "进行中";
         }
 
-        async function analyzeChallengeFrame() {
-            if (!stream || !currentChallengeId || livenessInFlight) {
+        async function captureChallengeStep() {
+            if (!stream || !currentChallengeId || challengeSubmitting) {
                 return;
             }
 
-            livenessInFlight = true;
+            challengeSubmitting = true;
+            captureStepButton.disabled = true;
             try {
-                const response = await fetch(`/api/liveness/challenges/${currentChallengeId}/frames`, {
+                const response = await fetch(`/api/liveness/challenges/${currentChallengeId}/captures`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ image_data: downscaleCurrentFrame() }),
                 });
                 const result = await response.json();
+                renderChallengeSteps(result.steps);
 
                 const tone = result.passed ? "pass" : (response.ok ? "working" : "fail");
-                const earText = result.ear === null || result.ear === undefined
-                    ? "EAR: 暂无"
-                    : `EAR: ${Number(result.ear).toFixed(3)}`;
-                setLivenessStatus(describeState(result), tone, result.message || "活体状态更新失败。", earText);
+                const yawText = result.signed_yaw === null || result.signed_yaw === undefined
+                    ? "当前尚无姿态指标。"
+                    : `signed_yaw: ${Number(result.signed_yaw).toFixed(3)} | yaw_offset: ${Number(result.yaw_offset || 0).toFixed(3)}`;
+                setLivenessStatus(describeState(result), tone, result.message || "动作挑战状态更新失败。", yawText);
 
                 if (!response.ok || !result.ok) {
-                    stopLivenessLoop();
-                    startChallengeButton.disabled = !stream;
-                    throw new Error(result.message || "活体验证失败，请重新开始。");
+                    if (!["challenge_missing", "challenge_expired", "challenge_consumed"].includes(result.code)) {
+                        captureStepButton.disabled = !stream;
+                    } else {
+                        resetChallengeState();
+                        startChallengeButton.disabled = !stream;
+                    }
+                    throw new Error(result.message || "动作挑战失败，请重新开始。");
                 }
 
                 if (result.passed && result.capture_preview_data) {
                     trustedChallengeId = currentChallengeId;
-                    stopLivenessLoop();
-                    updatePreview("当前照片：通过眨眼活体冻结的注册照", result.capture_preview_data);
+                    resetChallengeState();
+                    updatePreview("当前照片：通过动作挑战冻结的注册照", result.capture_preview_data);
                     closeCameraStream();
                     submitButton.disabled = false;
                     clearValidationResults();
+                    return;
                 }
+
+                captureStepButton.disabled = !stream;
             } catch (error) {
-                showMessage(error.message || "活体验证失败，请稍后重试。", "error");
+                showMessage(error.message || "动作挑战失败，请稍后重试。", "error");
             } finally {
-                livenessInFlight = false;
+                challengeSubmitting = false;
             }
         }
 
         clearPreviewButton.addEventListener("click", () => {
-            stopLivenessLoop();
+            resetChallengeState();
             resetTrustedCapture();
             startChallengeButton.disabled = !stream;
             clearMessage();
@@ -783,6 +937,7 @@
                 stopCameraButton.disabled = false;
                 startCameraButton.disabled = true;
                 startChallengeButton.disabled = false;
+                captureStepButton.disabled = true;
                 resetTrustedCapture();
                 clearValidationResults();
                 clearLivenessStatus();
@@ -800,26 +955,40 @@
 
             resetTrustedCapture();
             clearValidationResults();
-            stopLivenessLoop();
-            setLivenessStatus("初始化中", "working", "正在创建眨眼挑战，请稍候。", "当前还没有活体挑战数据。");
+            resetChallengeState();
+            setLivenessStatus("初始化中", "working", "正在创建动作挑战，请稍候。", "当前还没有活体挑战数据。");
             startChallengeButton.disabled = true;
 
             try {
                 const response = await fetch("/api/liveness/challenges", { method: "POST" });
                 const result = await response.json();
                 if (!response.ok || !result.ok) {
-                    throw new Error(result.message || "无法创建活体挑战。");
+                    throw new Error(result.message || "无法创建动作挑战。");
                 }
 
                 currentChallengeId = result.challenge_id;
-                setLivenessStatus(describeState(result), "working", result.message, "请保持正脸，系统将持续分析当前视频流。");
-                // 适度放慢发送节奏，避免浏览器在上一帧还没分析完时持续堆请求。
-                livenessLoopTimer = window.setInterval(analyzeChallengeFrame, 600);
+                renderChallengeSteps(result.steps);
+                setLivenessStatus(
+                    describeState(result),
+                    "working",
+                    result.message,
+                    result.current_step_instruction || "请按当前步骤完成动作后抓拍。",
+                );
+                captureStepButton.disabled = false;
             } catch (error) {
                 startChallengeButton.disabled = false;
-                setLivenessStatus("未开始", "fail", "活体挑战创建失败，请重试。", "当前还没有活体挑战数据。");
-                showMessage(error.message || "无法开始活体挑战。", "error");
+                setLivenessStatus("未开始", "fail", "动作挑战创建失败，请重试。", "当前还没有活体挑战数据。");
+                showMessage(error.message || "无法开始动作挑战。", "error");
             }
+        });
+
+        captureStepButton.addEventListener("click", async () => {
+            clearMessage();
+            if (!currentChallengeId) {
+                showMessage("请先开始动作挑战。", "error");
+                return;
+            }
+            await captureChallengeStep();
         });
 
         stopCameraButton.addEventListener("click", () => {
@@ -845,7 +1014,7 @@
             };
 
             if (!payload.challenge_id) {
-                showMessage("请先完成眨眼活体挑战。", "error");
+                showMessage("请先完成动作活体挑战。", "error");
                 return;
             }
 

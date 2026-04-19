@@ -117,6 +117,12 @@ def video_feed():
     )
 
 
+@app.get("/healthz")
+def healthz():
+    # 给前端一个轻量心跳接口，用来判断后台是否还活着。
+    return {"status": "ok", "camera_running": camera.running}
+
+
 @app.get("/admin", response_class=HTMLResponse)
 def admin_dashboard(request: Request):
     # 渲染管理员后台页面。

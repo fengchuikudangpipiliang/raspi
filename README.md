@@ -1,10 +1,23 @@
 从现在开始你遵守这些规则：
-1. 你是资深高级工程师。
+1. 你是资深高级工程师，注意开闭原则，高内聚低耦合
 2. 代码风格简洁优美，复用性高，注意开闭原则等6大法则，注意设计模式。
 3. 严格执行命令本身，不要延伸需求。
 4. 做防御性编程，考虑到边缘情况（Edge Cases），并加入必要的错误处理逻辑
 5. 所有新增内容同步写入 README.md。
 6. 编写代码都要在代码的本身那个文件加上注释，比如一个方法，那么就给这个方法加上详细注释，可能比较难理解加上注释等等
+
+to do:
+1.做人脸注册流
+新增用户
+采集/上传人脸图片
+提取人脸编码
+保存到 users 和 face_profiles
+
+2.再做人脸身份识别
+从数据库读取已注册编码
+拿实时画面中的人脸编码去比对
+识别出姓名 / 未知用户
+在 / 页面显示识别结果
 # face3
 
 基于树莓派的人脸识别考勤项目。
@@ -131,6 +144,8 @@
 - [templates/user_screen.html](/home/luck/face3/templates/user_screen.html)
 - [templates/admin_dashboard.html](/home/luck/face3/templates/admin_dashboard.html)
 - [static/css/site.css](/home/luck/face3/static/css/site.css)
+- [funnel_test_app.py](/home/luck/face3/scripts/web/funnel_test_app.py)
+- [funnel_test.html](/home/luck/face3/scripts/web/templates/funnel_test.html)
 
 ### 5. 识别与考勤业务层
 
@@ -217,6 +232,7 @@
 - 摄像头后台线程持续读帧
 - 基于 `face_recognition` 的轻量级人脸框检测
 - 摄像头不可用时的占位提示画面
+- 前端定时探测后台心跳，后台中断时自动切换为离线提示文案
 
 #### 管理员后台界面
 
@@ -247,8 +263,55 @@
 - 挂载静态资源目录
 - 提供两个 HTML 页面路由
 - 提供 `/video_feed` 摄像头流接口
+- 提供 `/healthz` 前端心跳接口
 - 已为核心页面文件补充结构注释，便于后续继续开发和阅读
 - `base.html` 已改为优先使用本地静态前端资源，不再依赖 CDN
+
+### 5. Tailscale Funnel 独立测试页
+
+为避免影响主项目运行逻辑，当前新增了一个独立测试应用：
+使用方式
+.venv/bin/python -m uvicorn funnel_test_app:app --host 127.0.0.1 --port 8010
+- [funnel_test_app.py](/home/luck/face3/funnel_test_app.py)
+- [funnel_test_app.py](/home/luck/face3/scripts/web/funnel_test_app.py)
+- [funnel_test.html](/home/luck/face3/scripts/web/templates/funnel_test.html)
+
+用途：
+
+- 单独启动一个公网用户资料提交 Web 服务
+- 不依赖主项目摄像头线程
+- 不依赖 SQLite
+- 先把“公网入口 + 用户资料采集 + 照片提交”这条链路跑通
+
+当前已支持：
+
+- 本地上传照片
+- 浏览器申请摄像头权限并现场拍照
+- 前端照片预览
+- 姓名、学号/工号、电话、备注信息填写
+- 授权勾选校验
+- 后端图片类型校验
+- 后端图片大小限制
+- 后端本地落盘保存
+- 每次提交生成独立登记编号
+
+当前保存目录：
+
+- `data/funnel_registrations/<submission_id>/face.xxx`
+- `data/funnel_registrations/<submission_id>/metadata.json`
+
+建议测试方式：
+
+```bash
+.venv/bin/uvicorn scripts.web.funnel_test_app:app --host 127.0.0.1 --port 8010
+sudo tailscale funnel 8010
+```
+
+如果 Funnel 打通，手机浏览器打开对应公网地址后，应当能看到公网用户资料提交页，并可执行：
+
+- 选择本地照片
+- 开启摄像头拍照
+- 提交资料并拿到登记编号
 
 ### 5. 摄像头实时流与人脸框检测
 
@@ -447,6 +510,52 @@ face3/
 当前状态：
 
 - 未正式开始
+
+真实业务中的常见处理方式：
+
+- 不会直接信任用户随手上传的一张照片，而是先做基础质量校验
+- 要求照片中必须只有一张清晰正脸，且人脸面积不能过小
+- 检查模糊、逆光、过暗、过曝、遮挡、侧脸、低头等问题
+- 通常要求用户提交多张照片，而不是只交一张
+- 很多系统会优先引导用户现场拍照，而不是纯相册上传
+- 对高风险场景会增加活体检测，防止用户拿别人照片、截图或屏幕翻拍来冒充
+- 注册成功前常常还会加入人工审核，尤其是第一次建档时
+- 用户身份和照片不会只靠“用户自己填什么就信什么”，而是要绑定学号、工号、手机号、管理员审批等外部身份信息
+- 生产环境会保留审核日志、提交时间、来源方式和失败原因，便于追溯
+
+对本项目的建议治理流程：
+
+- 先做人脸检测，没有检测到脸直接拒绝
+- 检测到多张脸直接拒绝，要求重新拍
+- 对人脸框大小、清晰度、亮度做最低门槛判断
+- 上传入口保留，但主流程优先引导用户走摄像头现场拍照
+- 每个用户至少采集 3 张合格照片
+- 先进入待审核状态，管理员确认后再正式写入 `face_profiles`
+- 后续如果条件允许，再补活体检测或人工复核入口
+
+建议的实现架构：
+
+- 不把所有校验逻辑硬写在一个接口函数里，而是拆成独立校验器
+- 采用“采集层 -> 质量校验层 -> 活体校验层 -> 审核层 -> 入库层”的流水线结构
+- 每个校验器只负责一种能力，例如：
+  - `FaceCountValidator`：检查是否只有一张脸
+  - `FaceSizeValidator`：检查人脸占比是否足够大
+  - `BlurValidator`：检查是否模糊
+  - `BrightnessValidator`：检查过暗/过曝
+  - `OcclusionValidator`：检查遮挡
+  - `PoseValidator`：检查是否大角度侧脸
+  - `LivenessValidator`：检查活体
+- 每个校验器输出统一结果结构，例如：`passed / code / message / score`
+- 主流程只负责编排这些校验器，不关心每个算法细节
+- 以后要新增规则时，只新增一个校验器并挂到流水线里，避免改核心主流程
+
+这样做的好处：
+
+- 符合开闭原则：对扩展开放，对修改关闭
+- 高内聚：每个模块只管一种质量问题
+- 低耦合：活体、模糊、遮挡、亮度等能力可以独立替换
+- 方便调参：每个校验项可以单独调整阈值
+- 方便审计：能明确知道一张照片为什么失败
 
 ### 任务 3：实时识别考勤流
 

@@ -1,0 +1,647 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ page_title }}</title>
+    <style>
+        /* 这个页面是公网用户资料提交页，所以样式尽量清晰、稳定、移动端友好。 */
+        :root {
+            color-scheme: dark;
+            --bg-a: #07111d;
+            --bg-b: #102437;
+            --panel: rgba(9, 19, 34, 0.84);
+            --panel-soft: rgba(255, 255, 255, 0.04);
+            --line: rgba(255, 255, 255, 0.1);
+            --text: #eef4ff;
+            --muted: rgba(238, 244, 255, 0.74);
+            --accent: #54f3ff;
+            --gold: #ffcf66;
+            --danger: #ff8a78;
+            --success: #6ce7b2;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            padding: 24px;
+            font-family: "Noto Sans SC", "Segoe UI", sans-serif;
+            color: var(--text);
+            background:
+                radial-gradient(circle at top left, rgba(84, 243, 255, 0.16), transparent 25%),
+                radial-gradient(circle at bottom right, rgba(255, 207, 102, 0.12), transparent 22%),
+                linear-gradient(135deg, var(--bg-a), var(--bg-b));
+        }
+
+        .page {
+            width: min(1120px, 100%);
+            margin: 0 auto;
+            display: grid;
+            gap: 24px;
+        }
+
+        .hero,
+        .panel {
+            border-radius: 24px;
+            border: 1px solid var(--line);
+            background: var(--panel);
+            backdrop-filter: blur(14px);
+            box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+        }
+
+        .hero {
+            padding: 28px;
+        }
+
+        .eyebrow {
+            display: inline-block;
+            margin-bottom: 16px;
+            padding: 8px 14px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            color: var(--gold);
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            font-size: 12px;
+        }
+
+        h1 {
+            margin: 0 0 12px;
+            font-size: clamp(30px, 5vw, 54px);
+            line-height: 1.08;
+        }
+
+        p {
+            margin: 0;
+            color: var(--muted);
+            line-height: 1.7;
+        }
+
+        .content {
+            display: grid;
+            grid-template-columns: 1.15fr 0.85fr;
+            gap: 24px;
+        }
+
+        .panel {
+            padding: 24px;
+        }
+
+        .panel h2 {
+            margin: 0 0 8px;
+            font-size: 24px;
+        }
+
+        .panel-copy {
+            margin-bottom: 20px;
+        }
+
+        .field-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 16px;
+        }
+
+        .field,
+        .source-card,
+        .preview-card,
+        .tip-card,
+        .message {
+            border-radius: 18px;
+            border: 1px solid var(--line);
+            background: var(--panel-soft);
+        }
+
+        .field {
+            padding: 14px 16px;
+        }
+
+        .field label {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .field input,
+        .field textarea,
+        .field select {
+            width: 100%;
+            border: 0;
+            outline: none;
+            background: transparent;
+            color: var(--text);
+            font-size: 16px;
+            font-family: inherit;
+        }
+
+        .field textarea {
+            min-height: 96px;
+            resize: vertical;
+        }
+
+        .source-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 16px;
+            margin-top: 18px;
+        }
+
+        .source-card {
+            padding: 18px;
+        }
+
+        .source-card h3 {
+            margin: 0 0 8px;
+            font-size: 18px;
+        }
+
+        .source-card p {
+            margin-bottom: 14px;
+        }
+
+        .source-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .button {
+            appearance: none;
+            border: 0;
+            cursor: pointer;
+            border-radius: 999px;
+            padding: 12px 18px;
+            font-size: 15px;
+            font-weight: 600;
+            color: #07111d;
+            background: var(--accent);
+        }
+
+        .button.secondary {
+            color: var(--text);
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .button.warning {
+            color: #07111d;
+            background: var(--gold);
+        }
+
+        .button:disabled {
+            cursor: not-allowed;
+            opacity: 0.45;
+        }
+
+        .preview-card {
+            overflow: hidden;
+            margin-top: 18px;
+        }
+
+        .preview-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .preview-stage {
+            position: relative;
+            min-height: 340px;
+            display: grid;
+            place-items: center;
+            background:
+                radial-gradient(circle at center, rgba(84, 243, 255, 0.08), transparent 45%),
+                linear-gradient(135deg, #08111d, #12263c);
+        }
+
+        .preview-stage video,
+        .preview-stage img,
+        .preview-stage canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .preview-empty {
+            padding: 28px;
+            text-align: center;
+            color: var(--muted);
+        }
+
+        .consent {
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
+            margin-top: 18px;
+            padding: 16px;
+            border-radius: 18px;
+            border: 1px solid rgba(84, 243, 255, 0.16);
+            background: rgba(84, 243, 255, 0.08);
+        }
+
+        .consent input {
+            margin-top: 4px;
+        }
+
+        .footer-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 20px;
+        }
+
+        .message {
+            display: none;
+            margin-top: 18px;
+            padding: 14px 16px;
+        }
+
+        .message.show {
+            display: block;
+        }
+
+        .message.error {
+            color: var(--danger);
+            border-color: rgba(255, 138, 120, 0.28);
+            background: rgba(255, 138, 120, 0.08);
+        }
+
+        .message.success {
+            color: var(--success);
+            border-color: rgba(108, 231, 178, 0.28);
+            background: rgba(108, 231, 178, 0.08);
+        }
+
+        .tip-list {
+            display: grid;
+            gap: 14px;
+        }
+
+        .tip-card {
+            padding: 16px;
+        }
+
+        .tip-card strong {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--accent);
+        }
+
+        .helper {
+            margin-top: 10px;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        @media (max-width: 960px) {
+            .content {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 640px) {
+            body {
+                padding: 16px;
+            }
+
+            .hero,
+            .panel {
+                padding: 18px;
+            }
+
+            .field-grid,
+            .source-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .preview-stage {
+                min-height: 280px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <main class="page">
+        <section class="hero">
+            <div class="eyebrow">Face3 Public Registration</div>
+            <h1>提交人脸资料</h1>
+            <p>这是一个模拟真实应用的人脸资料提交页面。你可以直接上传本地照片，也可以授权浏览器使用摄像头现场拍照，然后把资料提交给管理员审核。</p>
+        </section>
+
+        <section class="content">
+            <section class="panel">
+                <h2>用户信息</h2>
+                <p class="panel-copy">请先填写基础信息，再选择上传本地照片或使用摄像头拍照。系统会在提交前进行基础校验。</p>
+
+                <form id="registration-form">
+                    <div class="field-grid">
+                        <div class="field">
+                            <label for="full_name">姓名</label>
+                            <input id="full_name" name="full_name" maxlength="40" placeholder="请输入真实姓名" required>
+                        </div>
+                        <div class="field">
+                            <label for="student_or_employee_id">学号 / 工号</label>
+                            <input id="student_or_employee_id" name="student_or_employee_id" maxlength="40" placeholder="请输入学号或工号" required>
+                        </div>
+                        <div class="field">
+                            <label for="phone">联系电话</label>
+                            <input id="phone" name="phone" maxlength="20" placeholder="选填，便于联系">
+                        </div>
+                        <div class="field">
+                            <label for="source_mode">照片来源</label>
+                            <select id="source_mode" name="source_mode">
+                                <option value="upload">本地上传</option>
+                                <option value="camera">摄像头拍照</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="field" style="margin-top: 16px;">
+                        <label for="notes">补充说明</label>
+                        <textarea id="notes" name="notes" maxlength="200" placeholder="可填写班级、部门、注册原因等补充信息"></textarea>
+                    </div>
+
+                    <div class="source-grid">
+                        <div class="source-card">
+                            <h3>本地上传</h3>
+                            <p>适合直接从手机相册或电脑本地选择已拍好的正脸照片。</p>
+                            <div class="source-actions">
+                                <input class="hidden" type="file" id="upload_input" accept="image/png,image/jpeg,image/webp">
+                                <button class="button secondary" type="button" id="select_upload_button">选择本地照片</button>
+                                <button class="button secondary" type="button" id="clear_preview_button">清空当前照片</button>
+                            </div>
+                            <div class="helper">建议使用清晰正脸照片，大小不超过 5MB。</div>
+                        </div>
+
+                        <div class="source-card">
+                            <h3>摄像头拍照</h3>
+                            <p>浏览器会先申请摄像头权限，授权后你可以直接现场拍一张照片提交。</p>
+                            <div class="source-actions">
+                                <button class="button warning" type="button" id="start_camera_button">开启摄像头</button>
+                                <button class="button secondary" type="button" id="capture_button" disabled>拍照</button>
+                                <button class="button secondary" type="button" id="stop_camera_button" disabled>关闭摄像头</button>
+                            </div>
+                            <div class="helper">如果浏览器拒绝权限，请检查浏览器设置或系统相机权限。</div>
+                        </div>
+                    </div>
+
+                    <section class="preview-card">
+                        <div class="preview-head">
+                            <strong>照片预览</strong>
+                            <span id="preview_mode_label">当前未选择照片</span>
+                        </div>
+                        <div class="preview-stage" id="preview_stage">
+                            <div class="preview-empty" id="preview_empty">
+                                请先上传一张照片，或开启摄像头后进行拍照。
+                            </div>
+                            <video id="camera_video" class="hidden" autoplay playsinline muted></video>
+                            <img id="preview_image" class="hidden" alt="人脸照片预览">
+                            <canvas id="capture_canvas" class="hidden"></canvas>
+                        </div>
+                    </section>
+
+                    <label class="consent">
+                        <input type="checkbox" id="consent" name="consent">
+                        <span>我已知晓该照片将用于人脸识别考勤注册，并同意管理员在审核通过前暂存我的照片和基础资料。</span>
+                    </label>
+
+                    <div class="message" id="message_box"></div>
+
+                    <div class="footer-actions">
+                        <button class="button" type="submit" id="submit_button">提交资料</button>
+                    </div>
+                </form>
+            </section>
+
+            <aside class="panel">
+                <h2>提交说明</h2>
+                <p class="panel-copy">这里先模拟真实应用中的资料登记步骤，当前阶段以“前端采集 + 后端保存到本地目录”为主。</p>
+                <div class="tip-list">
+                    <div class="tip-card">
+                        <strong>照片建议</strong>
+                        <p>请保持正脸、无遮挡、光线均匀，尽量避免逆光、口罩和大角度侧脸。</p>
+                    </div>
+                    <div class="tip-card">
+                        <strong>推荐流程</strong>
+                        <p>手机用户优先使用摄像头拍照，电脑用户可直接上传本地照片。</p>
+                    </div>
+                    <div class="tip-card">
+                        <strong>防御性校验</strong>
+                        <p>系统会校验姓名、学号/工号、授权勾选、图片类型和图片大小，避免无效或损坏数据进入系统。</p>
+                    </div>
+                    <div class="tip-card">
+                        <strong>当前阶段</strong>
+                        <p>这一步先完成公网资料入口，后续再把资料审核、人脸编码提取和正式入库串起来。</p>
+                    </div>
+                </div>
+            </aside>
+        </section>
+    </main>
+
+    <script>
+        // 这个脚本负责处理文件选择、摄像头权限、拍照预览和提交。
+        const form = document.getElementById("registration-form");
+        const sourceMode = document.getElementById("source_mode");
+        const uploadInput = document.getElementById("upload_input");
+        const selectUploadButton = document.getElementById("select_upload_button");
+        const clearPreviewButton = document.getElementById("clear_preview_button");
+        const startCameraButton = document.getElementById("start_camera_button");
+        const captureButton = document.getElementById("capture_button");
+        const stopCameraButton = document.getElementById("stop_camera_button");
+        const previewModeLabel = document.getElementById("preview_mode_label");
+        const previewEmpty = document.getElementById("preview_empty");
+        const previewImage = document.getElementById("preview_image");
+        const cameraVideo = document.getElementById("camera_video");
+        const captureCanvas = document.getElementById("capture_canvas");
+        const messageBox = document.getElementById("message_box");
+        const submitButton = document.getElementById("submit_button");
+
+        let imageData = "";
+        let stream = null;
+
+        function showMessage(text, type) {
+            messageBox.textContent = text;
+            messageBox.className = `message show ${type}`;
+        }
+
+        function clearMessage() {
+            messageBox.textContent = "";
+            messageBox.className = "message";
+        }
+
+        function updatePreview(mode, dataUrl) {
+            imageData = dataUrl || "";
+            previewImage.classList.toggle("hidden", !dataUrl);
+            previewEmpty.classList.toggle("hidden", Boolean(dataUrl));
+            previewImage.src = dataUrl || "";
+            previewModeLabel.textContent = dataUrl ? mode : "当前未选择照片";
+        }
+
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach((track) => track.stop());
+                stream = null;
+            }
+            cameraVideo.srcObject = null;
+            cameraVideo.classList.add("hidden");
+            captureButton.disabled = true;
+            stopCameraButton.disabled = true;
+            startCameraButton.disabled = false;
+        }
+
+        // 把本地文件读成 data URL，这样前端和拍照都能统一走同一条提交链路。
+        function readFileAsDataUrl(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = () => reject(new Error("读取图片失败，请重新选择。"));
+                reader.readAsDataURL(file);
+            });
+        }
+
+        selectUploadButton.addEventListener("click", () => uploadInput.click());
+
+        uploadInput.addEventListener("change", async () => {
+            clearMessage();
+            const file = uploadInput.files?.[0];
+            if (!file) {
+                return;
+            }
+            if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+                showMessage("只支持 JPEG、PNG 或 WEBP 图片。", "error");
+                uploadInput.value = "";
+                return;
+            }
+            if (file.size > 5 * 1024 * 1024) {
+                showMessage("图片不能超过 5MB，请压缩后再试。", "error");
+                uploadInput.value = "";
+                return;
+            }
+            try {
+                const dataUrl = await readFileAsDataUrl(file);
+                updatePreview("当前照片：本地上传", dataUrl);
+                sourceMode.value = "upload";
+                stopCamera();
+            } catch (error) {
+                showMessage(error.message, "error");
+            }
+        });
+
+        clearPreviewButton.addEventListener("click", () => {
+            uploadInput.value = "";
+            updatePreview("", "");
+            clearMessage();
+        });
+
+        startCameraButton.addEventListener("click", async () => {
+            clearMessage();
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: "user", width: { ideal: 960 }, height: { ideal: 720 } },
+                    audio: false,
+                });
+                cameraVideo.srcObject = stream;
+                cameraVideo.classList.remove("hidden");
+                previewEmpty.classList.add("hidden");
+                previewImage.classList.add("hidden");
+                previewModeLabel.textContent = "当前模式：摄像头预览中";
+                sourceMode.value = "camera";
+                captureButton.disabled = false;
+                stopCameraButton.disabled = false;
+                startCameraButton.disabled = true;
+            } catch (error) {
+                showMessage("无法开启摄像头，请检查浏览器权限或设备相机设置。", "error");
+            }
+        });
+
+        captureButton.addEventListener("click", () => {
+            clearMessage();
+            if (!stream || !cameraVideo.videoWidth || !cameraVideo.videoHeight) {
+                showMessage("摄像头尚未准备好，请稍后重试。", "error");
+                return;
+            }
+
+            captureCanvas.width = cameraVideo.videoWidth;
+            captureCanvas.height = cameraVideo.videoHeight;
+            const context = captureCanvas.getContext("2d");
+            context.drawImage(cameraVideo, 0, 0, captureCanvas.width, captureCanvas.height);
+            const dataUrl = captureCanvas.toDataURL("image/jpeg", 0.92);
+            updatePreview("当前照片：摄像头拍照", dataUrl);
+            stopCamera();
+        });
+
+        stopCameraButton.addEventListener("click", () => {
+            stopCamera();
+            if (!imageData) {
+                previewEmpty.classList.remove("hidden");
+                previewModeLabel.textContent = "当前未选择照片";
+            }
+        });
+
+        sourceMode.addEventListener("change", () => {
+            clearMessage();
+        });
+
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            clearMessage();
+
+            const payload = {
+                full_name: document.getElementById("full_name").value,
+                student_or_employee_id: document.getElementById("student_or_employee_id").value,
+                phone: document.getElementById("phone").value,
+                source_mode: sourceMode.value,
+                notes: document.getElementById("notes").value,
+                consent: document.getElementById("consent").checked,
+                image_data: imageData,
+            };
+
+            if (!payload.image_data) {
+                showMessage("请先上传一张照片或使用摄像头拍照。", "error");
+                return;
+            }
+
+            submitButton.disabled = true;
+            submitButton.textContent = "提交中...";
+
+            try {
+                const response = await fetch("/api/submissions", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                });
+                const result = await response.json();
+
+                if (!response.ok || !result.ok) {
+                    throw new Error(result.message || "提交失败，请稍后重试。");
+                }
+
+                showMessage(`提交成功，登记编号：${result.submission_id}`, "success");
+                form.reset();
+                uploadInput.value = "";
+                updatePreview("", "");
+                stopCamera();
+            } catch (error) {
+                showMessage(error.message || "提交失败，请稍后重试。", "error");
+            } finally {
+                submitButton.disabled = false;
+                submitButton.textContent = "提交资料";
+            }
+        });
+
+        window.addEventListener("beforeunload", () => {
+            stopCamera();
+        });
+    </script>
+</body>
+</html>

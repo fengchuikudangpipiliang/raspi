@@ -143,6 +143,12 @@ body {
     animation: pulse 1.8s infinite;
 }
 
+.live-dot-offline {
+    background: #7f8ca6;
+    box-shadow: none;
+    animation: none;
+}
+
 .camera-stage {
     position: relative;
     min-height: 560px;
@@ -153,6 +159,11 @@ body {
         linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
         linear-gradient(135deg, #11243a 0%, #09111e 100%);
     background-size: 34px 34px, 34px 34px, auto;
+}
+
+.camera-stage-offline .camera-stream {
+    opacity: 0.08;
+    filter: grayscale(1);
 }
 
 .camera-stream {
@@ -255,6 +266,16 @@ body {
     background: rgba(7, 12, 24, 0.75);
     border: 1px solid rgba(84, 243, 255, 0.18);
     z-index: 4;
+}
+
+.status-bubble-offline {
+    border-color: rgba(255, 126, 107, 0.3);
+    background: rgba(31, 14, 18, 0.8);
+}
+
+.status-bubble-offline .status-label,
+.status-bubble-offline strong {
+    color: #ff9f8f;
 }
 
 .status-label {

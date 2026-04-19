@@ -24,12 +24,17 @@
                 {# 左侧主视觉区域：后面真实接入时，这里可以替换成摄像头视频流。 #}
                 <section class="stage-card h-100">
                     <div class="stage-toolbar">
-                        <span class="live-dot"></span>
-                        <span>实时识别画面</span>
+                        <span class="live-dot" id="live-dot"></span>
+                        <span id="stream-title">实时识别画面</span>
                         <span class="ms-auto muted-text">建议单人进入画面</span>
                     </div>
-                    <div class="camera-stage">
-                        <img class="camera-stream" src="{{ url_for('video_feed') }}" alt="实时摄像头画面">
+                    <div class="camera-stage" id="camera-stage">
+                        <img
+                            class="camera-stream"
+                            id="camera-stream"
+                            src="{{ url_for('video_feed') }}"
+                            alt="实时摄像头画面"
+                        >
                         {# 这一层是纯视觉氛围，不承载业务逻辑。 #}
                         <div class="camera-noise"></div>
                         {# face-frame 是人脸取景框原型，后续可叠加真实检测框。 #}
@@ -42,9 +47,9 @@
                             <div class="frame-hint">请将面部保持在框内</div>
                         </div>
                         {# 状态气泡：后面可以替换成“识别中 / 成功 / 失败”等实时状态。 #}
-                        <div class="status-bubble">
-                            <span class="status-label">{{ data.status_label }}</span>
-                            <strong>{{ data.status_text }}</strong>
+                        <div class="status-bubble" id="status-bubble">
+                            <span class="status-label" id="status-label">{{ data.status_label }}</span>
+                            <strong id="status-text">{{ data.status_text }}</strong>
                         </div>
                     </div>
                 </section>
@@ -113,4 +118,74 @@
         </div>
     </div>
 </main>
+
+<script>
+    const cameraStream = document.getElementById("camera-stream");
+    const cameraStage = document.getElementById("camera-stage");
+    const statusBubble = document.getElementById("status-bubble");
+    const statusLabel = document.getElementById("status-label");
+    const statusText = document.getElementById("status-text");
+    const liveDot = document.getElementById("live-dot");
+    const streamTitle = document.getElementById("stream-title");
+    const defaultLabel = "{{ data.status_label }}";
+    const defaultText = "{{ data.status_text }}";
+    const videoFeedUrl = "{{ url_for('video_feed') }}";
+    const healthzUrl = "{{ url_for('healthz') }}";
+
+    let backendOnline = true;
+
+    function setUiState(isOnline) {
+        backendOnline = isOnline;
+        cameraStage.classList.toggle("camera-stage-offline", !isOnline);
+        statusBubble.classList.toggle("status-bubble-offline", !isOnline);
+        liveDot.classList.toggle("live-dot-offline", !isOnline);
+
+        if (isOnline) {
+            streamTitle.textContent = "实时识别画面";
+            statusLabel.textContent = defaultLabel;
+            statusText.textContent = defaultText;
+            return;
+        }
+
+        streamTitle.textContent = "服务连接已断开";
+        statusLabel.textContent = "离线";
+        statusText.textContent = "后台服务已停止，请重新启动系统服务";
+    }
+
+    function refreshVideoStream() {
+        cameraStream.src = `${videoFeedUrl}?t=${Date.now()}`;
+    }
+
+    async function checkBackend() {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
+
+        try {
+            const response = await fetch(`${healthzUrl}?t=${Date.now()}`, {
+                cache: "no-store",
+                signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                throw new Error("health check failed");
+            }
+
+            if (!backendOnline) {
+                setUiState(true);
+                refreshVideoStream();
+            }
+        } catch (error) {
+            clearTimeout(timeoutId);
+            setUiState(false);
+        }
+    }
+
+    cameraStream.addEventListener("error", () => {
+        setUiState(false);
+    });
+
+    setUiState(true);
+    window.setInterval(checkBackend, 3000);
+</script>
 {% endblock %}

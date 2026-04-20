@@ -1,0 +1,296 @@
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+from fastapi import APIRouter
+from fastapi import HTTPException
+from fastapi import Request
+from fastapi.responses import FileResponse
+
+from scripts.config.config import cfg
+from scripts.database.sqlite_db import AttendanceRepository
+from scripts.device_status_service import DeviceStatusService
+from scripts.web.account_security import hash_secret
+from scripts.web.account_security import normalize_name
+from scripts.web.account_security import validate_new_password
+
+
+def build_admin_api_router(camera, started_at) -> APIRouter:
+    """
+    构建设备侧管理员 API 路由。
+    这些接口给 Windows 管理项目通过 Tailscale 直接调用，不依赖浏览器 Session。
+    """
+
+    router = APIRouter(prefix="/api/admin", tags=["admin-api"])
+    repo = AttendanceRepository()
+    device_status_service = DeviceStatusService(camera=camera, repo=repo, started_at=started_at)
+    project_root = Path(__file__).resolve().parents[1]
+
+    def require_admin_token(request: Request) -> None:
+        configured_token = (cfg.admin_api_token or "").strip()
+        if not configured_token:
+            raise HTTPException(status_code=503, detail="管理员 API Token 尚未配置。")
+
+        authorization = request.headers.get("Authorization", "").strip()
+        fallback_token = request.headers.get("X-Admin-Token", "").strip()
+        if authorization.lower().startswith("bearer "):
+            provided_token = authorization[7:].strip()
+        else:
+            provided_token = fallback_token
+
+        if not provided_token or provided_token != configured_token:
+            raise HTTPException(status_code=401, detail="管理员 API 鉴权失败。")
+
+    def resolve_local_file(path_text: str) -> Path:
+        if not path_text:
+            raise HTTPException(status_code=404, detail="文件路径不存在。")
+        path = Path(path_text)
+        if not path.is_absolute():
+            path = (project_root / path).resolve()
+        else:
+            path = path.resolve()
+
+        try:
+            path.relative_to(project_root)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="文件路径非法。") from error
+
+        if not path.exists() or not path.is_file():
+            raise HTTPException(status_code=404, detail="文件不存在。")
+        return path
+
+    def serialize_user_summary(user: dict) -> dict:
+        return {
+            "id": user["id"],
+            "roster_member_id": user.get("roster_member_id"),
+            "name": user["name"],
+            "code": user["code"],
+            "role": user.get("roster_role") or "member",
+            "status": user.get("roster_status") or "active",
+            "registered": bool(user.get("password_hash")),
+            "password_changed_at": user.get("password_changed_at"),
+            "last_login_at": user.get("last_login_at"),
+            "created_at": user.get("created_at"),
+            "face_profiles_count": int(user.get("face_profiles_count") or 0),
+            "face_profile_ready": int(user.get("face_profiles_count") or 0) > 0,
+        }
+
+    def serialize_face_profile(face_profile: dict) -> dict:
+        return {
+            "id": face_profile["id"],
+            "user_id": face_profile["user_id"],
+            "name": face_profile["name"],
+            "code": face_profile["code"],
+            "image_path": face_profile["image_path"],
+            "created_at": face_profile["created_at"],
+            "image_url": f"/api/admin/face-profiles/{face_profile['id']}/image",
+        }
+
+    def serialize_attendance_record(record: dict) -> dict:
+        return {
+            "id": record["id"],
+            "user_id": record["user_id"],
+            "name": record["name"],
+            "code": record["code"],
+            "check_type": record["check_type"],
+            "check_time": record["check_time"],
+            "snapshot_path": record["snapshot_path"],
+            "snapshot_url": f"/api/admin/attendance/{record['id']}/snapshot" if record.get("snapshot_path") else None,
+            "confidence": record["confidence"],
+        }
+
+    @router.get("/device/info")
+    def get_device_info(request: Request):
+        require_admin_token(request)
+        return {"ok": True, "data": device_status_service.build_device_info()}
+
+    @router.get("/device/health")
+    def get_device_health(request: Request):
+        require_admin_token(request)
+        return {"ok": True, "data": device_status_service.build_health()}
+
+    @router.get("/device/metrics")
+    def get_device_metrics(request: Request):
+        require_admin_token(request)
+        return {"ok": True, "data": device_status_service.build_metrics()}
+
+    @router.post("/device/reload-config")
+    def reload_device_config(request: Request):
+        require_admin_token(request)
+        changed = cfg.reload()
+        return {
+            "ok": True,
+            "data": {
+                "changed": bool(changed),
+                "device_id": cfg.device_id,
+                "device_name": cfg.device_name,
+                "device_location": cfg.device_location,
+            },
+        }
+
+    @router.get("/roster-members")
+    def get_roster_members(request: Request, search: str = "", status: str = ""):
+        require_admin_token(request)
+        registered_codes = {
+            user["code"]
+            for user in repo.list_users_with_face_stats(registered_only=True)
+        }
+        status = (status or "").strip().lower()
+        search = (search or "").strip()
+        items = []
+        for member in repo.list_roster_members():
+            if search and search not in member["name"] and search.upper() not in member["code"]:
+                continue
+            if status and member["status"] != status:
+                continue
+            items.append(
+                {
+                    **member,
+                    "registered": member["code"] in registered_codes,
+                }
+            )
+        return {"ok": True, "items": items, "total": len(items)}
+
+    @router.get("/users")
+    def get_users(request: Request, search: str = "", status: str = "", registered_only: bool = False):
+        require_admin_token(request)
+        items = [serialize_user_summary(item) for item in repo.list_users_with_face_stats(search=search, status=status, registered_only=registered_only)]
+        return {"ok": True, "items": items, "total": len(items)}
+
+    @router.get("/users/{user_id}")
+    def get_user_detail(request: Request, user_id: int):
+        require_admin_token(request)
+        user = repo.get_user_detail(user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在。")
+        face_profiles = [serialize_face_profile(item) for item in repo.list_face_profiles_for_user(user_id)]
+        return {
+            "ok": True,
+            "data": {
+                **serialize_user_summary(user),
+                "face_profiles": face_profiles,
+            },
+        }
+
+    @router.post("/users/{user_id}/status")
+    async def update_user_status(request: Request, user_id: int):
+        require_admin_token(request)
+        payload = await request.json()
+        status = (payload.get("status", "") or "").strip().lower() if isinstance(payload, dict) else ""
+        if status not in {"active", "disabled"}:
+            raise HTTPException(status_code=400, detail="状态只允许 active 或 disabled。")
+
+        user = repo.get_user_detail(user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在。")
+        if not user.get("roster_member_id"):
+            raise HTTPException(status_code=400, detail="该用户没有绑定成员名单，无法更新状态。")
+
+        changed = repo.update_user_roster_status(user_id, status)
+        return {
+            "ok": True,
+            "data": {
+                "updated": changed,
+                "user_id": user_id,
+                "status": status,
+            },
+        }
+
+    @router.post("/users/{user_id}/password/reset")
+    async def reset_user_password(request: Request, user_id: int):
+        require_admin_token(request)
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="提交数据格式错误。")
+
+        new_password = (payload.get("new_password", "") or "").strip()
+        confirm_password = (payload.get("confirm_password", "") or new_password).strip()
+        user = repo.get_user_detail(user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在。")
+        if not user.get("password_hash"):
+            raise HTTPException(status_code=400, detail="该用户尚未完成首次注册，不能直接重置登录密码。")
+
+        validated_password = validate_new_password(
+            code=user["code"],
+            name=normalize_name(user["name"]),
+            initial_password="",
+            new_password=new_password,
+            confirm_password=confirm_password,
+        )
+        changed = repo.update_user_password_hash(user_id, hash_secret(validated_password))
+        return {
+            "ok": True,
+            "data": {
+                "updated": changed,
+                "user_id": user_id,
+            },
+        }
+
+    @router.get("/face-profiles")
+    def get_face_profiles(request: Request, limit: int = 100, user_id: Optional[int] = None, code: str = ""):
+        require_admin_token(request)
+        safe_limit = min(max(int(limit), 1), 200)
+        items = [serialize_face_profile(item) for item in repo.list_face_profiles(limit=safe_limit, user_id=user_id, code=code)]
+        return {"ok": True, "items": items, "total": len(items)}
+
+    @router.get("/face-profiles/{face_profile_id}/image")
+    def get_face_profile_image(request: Request, face_profile_id: int):
+        require_admin_token(request)
+        face_profile = repo.get_face_profile_by_id(face_profile_id)
+        if not face_profile:
+            raise HTTPException(status_code=404, detail="人脸档案不存在。")
+        file_path = resolve_local_file(face_profile["image_path"])
+        return FileResponse(file_path)
+
+    @router.delete("/face-profiles/{face_profile_id}")
+    def delete_face_profile(request: Request, face_profile_id: int):
+        require_admin_token(request)
+        face_profile = repo.get_face_profile_by_id(face_profile_id)
+        if not face_profile:
+            raise HTTPException(status_code=404, detail="人脸档案不存在。")
+
+        file_path = None
+        try:
+            file_path = resolve_local_file(face_profile["image_path"])
+        except HTTPException:
+            file_path = None
+
+        deleted = repo.delete_face_profile(face_profile_id)
+        if file_path and file_path.exists():
+            file_path.unlink(missing_ok=True)
+
+        return {
+            "ok": True,
+            "data": {
+                "deleted": deleted,
+                "face_profile_id": face_profile_id,
+            },
+        }
+
+    @router.get("/attendance")
+    def get_attendance_records(request: Request, limit: int = 50, date: str = "", code: str = "", name: str = ""):
+        require_admin_token(request)
+        safe_limit = min(max(int(limit), 1), 300)
+        items = [serialize_attendance_record(item) for item in repo.list_attendance_records(limit=safe_limit, date=date, code=code, name=name)]
+        return {"ok": True, "items": items, "total": len(items)}
+
+    @router.get("/attendance/today-summary")
+    def get_attendance_today_summary(request: Request, date: str = ""):
+        require_admin_token(request)
+        if not date:
+            date = datetime.now().astimezone().date().isoformat()
+        return {"ok": True, "data": repo.get_attendance_summary(date=date)}
+
+    @router.get("/attendance/{attendance_id}/snapshot")
+    def get_attendance_snapshot(request: Request, attendance_id: int):
+        require_admin_token(request)
+        record = repo.get_attendance_record_by_id(attendance_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="考勤记录不存在。")
+        if not record.get("snapshot_path"):
+            raise HTTPException(status_code=404, detail="该考勤记录没有快照。")
+        file_path = resolve_local_file(record["snapshot_path"])
+        return FileResponse(file_path)
+
+    return router

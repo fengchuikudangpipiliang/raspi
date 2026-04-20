@@ -135,6 +135,11 @@ class AttendanceRepository:
     def __init__(self, db=None):
         self.db = db or SQLiteDB()
 
+    def ping(self) -> bool:
+        with self.db.session() as connection:
+            connection.execute("SELECT 1").fetchone()
+        return True
+
     def create_user(self, name, code, roster_member_id=None, password_hash=None):
         with self.db.session() as connection:
             cursor = connection.execute(
@@ -338,6 +343,91 @@ class AttendanceRepository:
             ).fetchall()
             return [dict(row) for row in rows]
 
+    def list_users_with_face_stats(self, search: str = "", status: str = "", registered_only: bool = False):
+        search = (search or "").strip()
+        status = (status or "").strip().lower()
+        with self.db.session() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    users.id,
+                    users.roster_member_id,
+                    users.name,
+                    users.code,
+                    users.password_hash,
+                    users.password_changed_at,
+                    users.last_login_at,
+                    users.created_at,
+                    roster_members.role AS roster_role,
+                    roster_members.status AS roster_status,
+                    COUNT(face_profiles.id) AS face_profiles_count
+                FROM users
+                LEFT JOIN roster_members ON roster_members.id = users.roster_member_id
+                LEFT JOIN face_profiles ON face_profiles.user_id = users.id
+                WHERE
+                    (? = '' OR users.name LIKE ? OR users.code LIKE ?)
+                    AND (? = '' OR IFNULL(roster_members.status, 'active') = ?)
+                    AND (? = 0 OR users.password_hash IS NOT NULL)
+                GROUP BY
+                    users.id,
+                    users.roster_member_id,
+                    users.name,
+                    users.code,
+                    users.password_hash,
+                    users.password_changed_at,
+                    users.last_login_at,
+                    users.created_at,
+                    roster_members.role,
+                    roster_members.status
+                ORDER BY users.id DESC
+                """,
+                (
+                    search,
+                    f"%{search}%",
+                    f"%{search}%",
+                    status,
+                    status,
+                    1 if registered_only else 0,
+                ),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def get_user_detail(self, user_id: int) -> Optional[dict]:
+        with self.db.session() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    users.id,
+                    users.roster_member_id,
+                    users.name,
+                    users.code,
+                    users.password_hash,
+                    users.password_changed_at,
+                    users.last_login_at,
+                    users.created_at,
+                    roster_members.role AS roster_role,
+                    roster_members.status AS roster_status,
+                    COUNT(face_profiles.id) AS face_profiles_count
+                FROM users
+                LEFT JOIN roster_members ON roster_members.id = users.roster_member_id
+                LEFT JOIN face_profiles ON face_profiles.user_id = users.id
+                WHERE users.id = ?
+                GROUP BY
+                    users.id,
+                    users.roster_member_id,
+                    users.name,
+                    users.code,
+                    users.password_hash,
+                    users.password_changed_at,
+                    users.last_login_at,
+                    users.created_at,
+                    roster_members.role,
+                    roster_members.status
+                """,
+                (user_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
     def save_face_profile(self, user_id, image_path, encoding):
         with self.db.session() as connection:
             cursor = connection.execute(
@@ -358,14 +448,101 @@ class AttendanceRepository:
         with self.db.session() as connection:
             rows = connection.execute(
                 """
-                SELECT id, user_id, image_path, created_at
+                SELECT
+                    face_profiles.id,
+                    face_profiles.user_id,
+                    users.name,
+                    users.code,
+                    face_profiles.image_path,
+                    face_profiles.created_at
                 FROM face_profiles
+                JOIN users ON users.id = face_profiles.user_id
                 WHERE user_id = ?
-                ORDER BY id DESC
+                ORDER BY face_profiles.id DESC
                 """,
                 (user_id,),
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def list_face_profiles(self, limit: int = 50, user_id: Optional[int] = None, code: str = ""):
+        code = (code or "").strip()
+        with self.db.session() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    face_profiles.id,
+                    face_profiles.user_id,
+                    users.name,
+                    users.code,
+                    face_profiles.image_path,
+                    face_profiles.created_at
+                FROM face_profiles
+                JOIN users ON users.id = face_profiles.user_id
+                WHERE
+                    (? IS NULL OR face_profiles.user_id = ?)
+                    AND (? = '' OR users.code = ?)
+                ORDER BY face_profiles.id DESC
+                LIMIT ?
+                """,
+                (user_id, user_id, code, code, limit),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def get_face_profile_by_id(self, face_profile_id: int) -> Optional[dict]:
+        with self.db.session() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    face_profiles.id,
+                    face_profiles.user_id,
+                    users.name,
+                    users.code,
+                    face_profiles.image_path,
+                    face_profiles.encoding,
+                    face_profiles.created_at
+                FROM face_profiles
+                JOIN users ON users.id = face_profiles.user_id
+                WHERE face_profiles.id = ?
+                """,
+                (face_profile_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def delete_face_profile(self, face_profile_id: int) -> bool:
+        with self.db.session() as connection:
+            cursor = connection.execute(
+                "DELETE FROM face_profiles WHERE id = ?",
+                (face_profile_id,),
+            )
+            return cursor.rowcount > 0
+
+    def update_user_password_hash(self, user_id: int, password_hash: str) -> bool:
+        with self.db.session() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE users
+                SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (password_hash, user_id),
+            )
+            return cursor.rowcount > 0
+
+    def update_user_roster_status(self, user_id: int, status: str) -> bool:
+        with self.db.session() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE roster_members
+                SET status = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = (
+                    SELECT roster_member_id
+                    FROM users
+                    WHERE id = ?
+                )
+                """,
+                (status, user_id),
+            )
+            return cursor.rowcount > 0
 
     def create_attendance_record(self, user_id, check_type="check_in", snapshot_path=None, confidence=None):
         with self.db.session() as connection:
@@ -378,7 +555,10 @@ class AttendanceRepository:
             )
             return cursor.lastrowid
 
-    def list_attendance_records(self, limit=50):
+    def list_attendance_records(self, limit=50, date: str = "", code: str = "", name: str = ""):
+        date = (date or "").strip()
+        code = (code or "").strip()
+        name = (name or "").strip()
         with self.db.session() as connection:
             rows = connection.execute(
                 """
@@ -393,12 +573,79 @@ class AttendanceRepository:
                     attendance_records.confidence
                 FROM attendance_records
                 JOIN users ON users.id = attendance_records.user_id
+                WHERE
+                    (? = '' OR date(attendance_records.check_time, 'localtime') = ?)
+                    AND (? = '' OR users.code = ?)
+                    AND (? = '' OR users.name LIKE ?)
                 ORDER BY attendance_records.id DESC
                 LIMIT ?
                 """,
-                (limit,),
+                (
+                    date,
+                    date,
+                    code,
+                    code,
+                    name,
+                    f"%{name}%",
+                    limit,
+                ),
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def get_attendance_record_by_id(self, attendance_id: int) -> Optional[dict]:
+        with self.db.session() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    attendance_records.id,
+                    attendance_records.user_id,
+                    users.name,
+                    users.code,
+                    attendance_records.check_type,
+                    attendance_records.check_time,
+                    attendance_records.snapshot_path,
+                    attendance_records.confidence
+                FROM attendance_records
+                JOIN users ON users.id = attendance_records.user_id
+                WHERE attendance_records.id = ?
+                """,
+                (attendance_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_attendance_summary(self, date: str = "") -> dict:
+        date = (date or "").strip()
+        with self.db.session() as connection:
+            attendance_clause = ""
+            params: tuple = ()
+            if date:
+                attendance_clause = "WHERE date(check_time, 'localtime') = ?"
+                params = (date,)
+
+            total_users_row = connection.execute("SELECT COUNT(*) AS total FROM users").fetchone()
+            checked_in_row = connection.execute(
+                f"""
+                SELECT COUNT(DISTINCT user_id) AS total
+                FROM attendance_records
+                {attendance_clause}
+                """,
+                params,
+            ).fetchone()
+            record_count_row = connection.execute(
+                f"""
+                SELECT COUNT(*) AS total
+                FROM attendance_records
+                {attendance_clause}
+                """,
+                params,
+            ).fetchone()
+            return {
+                "date": date,
+                "registered_users": int(total_users_row["total"]),
+                "checked_in_users": int(checked_in_row["total"]),
+                "attendance_records": int(record_count_row["total"]),
+                "absent_users": max(int(total_users_row["total"]) - int(checked_in_row["total"]), 0),
+            }
 
 
 def init_db():

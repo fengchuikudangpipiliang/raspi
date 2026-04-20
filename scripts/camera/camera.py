@@ -23,6 +23,9 @@ class VideoCamera:
         self.face_locations = []
         self.frame_count = 0
         self.next_open_at = 0.0
+        self.last_frame_at = None
+        self.last_opened_at = None
+        self.last_error = None
 
     def start(self):
         if self.running:
@@ -59,12 +62,14 @@ class VideoCamera:
         while self.running:
             if not self._ensure_capture():
                 self._set_frame(self._build_placeholder("camera unavailable"))
+                self.last_error = "camera_unavailable"
                 time.sleep(1)
                 continue
 
             success, frame = self.capture.read()
             if not success or frame is None:
                 self._set_frame(self._build_placeholder("camera read failed"))
+                self.last_error = "camera_read_failed"
                 time.sleep(0.2)
                 continue
 
@@ -72,6 +77,8 @@ class VideoCamera:
             encoded = self._encode_frame(rendered)
             if encoded is not None:
                 self._set_frame(encoded)
+                self.last_frame_at = time.time()
+                self.last_error = None
             time.sleep(sleep_time)
 
     def _ensure_capture(self):
@@ -86,11 +93,14 @@ class VideoCamera:
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.camera_height)
         self.capture.set(cv2.CAP_PROP_FPS, cfg.camera_fps)
         if self.capture.isOpened():
+            self.last_opened_at = time.time()
+            self.last_error = None
             return True
 
         self.capture.release()
         self.capture = None
         self.next_open_at = time.time() + 3
+        self.last_error = "camera_open_failed"
         return False
 
     def _process_frame(self, frame):

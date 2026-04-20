@@ -1,5 +1,6 @@
 from pathlib import Path
 from time import perf_counter
+from time import time
 
 from fastapi import FastAPI
 from fastapi import Request
@@ -13,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from scripts.camera.camera import VideoCamera
+from scripts.admin_api import build_admin_api_router
 from scripts.config.config import cfg
 from scripts.database.sqlite_db import init_db
 from scripts.web.liveness import LivenessChallengeService
@@ -26,6 +28,7 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 funnel_templates = Jinja2Templates(directory=str(BASE_DIR / "scripts" / "web" / "templates"))
 
 # 创建主应用。
+APP_STARTED_AT = time()
 app = FastAPI(title="face3")
 app.add_middleware(
     SessionMiddleware,
@@ -41,6 +44,7 @@ camera = VideoCamera()
 portal_service = PortalAccountService()
 roster_import_service = RosterImportService()
 portal_liveness_service = LivenessChallengeService()
+app.include_router(build_admin_api_router(camera=camera, started_at=APP_STARTED_AT))
 
 
 # 终端识别页演示数据。

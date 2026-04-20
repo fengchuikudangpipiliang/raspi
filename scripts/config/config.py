@@ -44,6 +44,10 @@ DEFAULT_CONFIG = {
     "attendance_start_time": "00:00",
     "attendance_end_time": "23:59",
     "log_level": "INFO",
+    "device_id": "face3-pi-01",
+    "device_name": "Face3 Raspberry Pi",
+    "device_location": "未设置",
+    "admin_api_token": "face3-admin-change-this-token",
 }
 
 

@@ -182,6 +182,8 @@ to do:
 - SQLite 相关配置
 - 文件目录配置
 - 考勤时间配置
+- 外网用户门户会话配置
+- 本地成员名单文件路径
 
 ### 2. SQLite 数据库基础设施
 
@@ -196,6 +198,7 @@ to do:
 
 已创建的数据表：
 
+- `roster_members`
 - `users`
 - `face_profiles`
 - `attendance_records`
@@ -255,19 +258,80 @@ to do:
 - 后续容易接入真实数据库数据
 - 页面结构先稳定，功能后续逐步接入
 
-### 4. FastAPI 页面入口
+#### 外网用户门户界面
+
+路由：
+
+- `/portal/register`
+- `/portal/login`
+- `/portal/home`
+- `/portal/face`
+
+主要内容：
+
+- 首次注册页
+- 正式密码登录页
+- 登录后的用户中心
+- 登录后的人脸资料现场拍摄页
+
+设计目标：
+
+- 让树莓派终端页和外网用户门户彻底分离
+- 首次注册时强制校验本地名单和管理员预置初始密码
+- 登录态下再做人脸上传，避免匿名公网接口直接入库
+- 登录态下再做人脸现场拍摄和提交，避免匿名公网接口直接入库
+- 后续容易继续扩展为密码修改、历史记录、审核结果页
+
+### 4. 外网用户门户与名单注册流
+
+当前已经实现一条面向单位内部成员的最小业务闭环：
+
+- 服务启动时自动读取 `data/member_roster.csv`
+- 名单导入到 `roster_members`
+- 用户使用“姓名 + 学号/工号 + 初始密码”完成首次注册
+- 注册成功时强制设置新密码
+- 后续登录只认新密码，不再认初始密码
+- 登录后才能进入外网人脸拍摄页
+- `/portal/face` 直接复用 `funnel_test.html` 的动作挑战界面
+- 现场拍照提交会复用现有 `RegistrationValidationPipeline`
+- 校验通过后提取编码并写入 `face_profiles`
+
+当前新增模块：
+
+- [scripts/web/account_security.py](/home/luck/face3/scripts/web/account_security.py)
+- [scripts/web/roster_import_service.py](/home/luck/face3/scripts/web/roster_import_service.py)
+- [scripts/web/portal_submission_service.py](/home/luck/face3/scripts/web/portal_submission_service.py)
+- [templates/portal_register.html](/home/luck/face3/templates/portal_register.html)
+- [templates/portal_login.html](/home/luck/face3/templates/portal_login.html)
+- [templates/portal_home.html](/home/luck/face3/templates/portal_home.html)
+- [scripts/web/templates/funnel_test.html](/home/luck/face3/scripts/web/templates/funnel_test.html)
+- [data/member_roster.csv](/home/luck/face3/data/member_roster.csv)
+
+当前门禁规则：
+
+- 不在本地名单中的编号不能注册
+- 名字与名单不匹配不能注册
+- 初始密码错误不能注册
+- 已完成首次注册的编号不能重复注册
+- 注册时必须设置符合规则的新密码
+- 未登录用户不能访问人脸上传接口
+- 每个账号的人脸档案数量有上限，避免被无限写入
+
+### 5. FastAPI 页面入口
 
 当前 [main.py](/home/luck/face3/main.py) 已经实现：
 
 - 启动时初始化数据库
+- 启动时同步本地成员名单
 - 挂载静态资源目录
-- 提供两个 HTML 页面路由
+- 提供树莓派终端页、后台页和外网门户页路由
+- 提供基于 Session 的登录态
 - 提供 `/video_feed` 摄像头流接口
 - 提供 `/healthz` 前端心跳接口
 - 已为核心页面文件补充结构注释，便于后续继续开发和阅读
 - `base.html` 已改为优先使用本地静态前端资源，不再依赖 CDN
 
-### 5. Tailscale Funnel 独立测试页
+### 6. Tailscale Funnel 独立测试页
 
 为避免影响主项目运行逻辑，当前新增了一个独立测试应用：
 使用方式
@@ -338,7 +402,7 @@ sudo tailscale funnel 8010
 - 按步骤抓拍当前动作
 - 提交资料并拿到登记编号
 
-### 5. 摄像头实时流与人脸框检测
+### 7. 摄像头实时流与人脸框检测
 
 当前 [scripts/camera/camera.py](/home/luck/face3/scripts/camera/camera.py) 已实现：
 
@@ -360,23 +424,49 @@ sudo tailscale funnel 8010
 
 当前 SQLite 表结构如下。
 
-### 1. `users`
+### 1. `roster_members`
+
+成员名单表，存储允许注册的单位内部成员。
+
+字段：
+
+- `id`：主键
+- `name`：姓名
+- `code`：唯一学号/工号
+- `role`：成员角色
+- `status`：状态，当前支持 `active / disabled`
+- `initial_password_hash`：管理员预置初始密码的哈希
+- `created_at`：创建时间
+- `updated_at`：更新时间
+
+作用：
+
+- 作为首次注册的白名单来源
+- 把“允许注册的人”和“已经正式注册的人”拆开，降低耦合
+- 后续可以继续扩展为班级、课题组、部门维度的导入来源
+
+### 2. `users`
 
 用户主表，存储系统中已登记的身份对象。
 
 字段：
 
 - `id`：主键
+- `roster_member_id`：关联名单成员
 - `name`：姓名
 - `code`：唯一编号，可用于学号、工号或人员编码
+- `password_hash`：正式登录密码哈希
+- `password_changed_at`：首次注册或改密时间
+- `last_login_at`：最后登录时间
 - `created_at`：创建时间
 
 作用：
 
 - 作为所有用户身份信息的主表
+- 保存正式登录凭证
 - 后续人脸信息、考勤信息都通过 `user_id` 进行关联
 
-### 2. `face_profiles`
+### 3. `face_profiles`
 
 人脸特征表，存储与用户相关的人脸资料。
 
@@ -393,7 +483,7 @@ sudo tailscale funnel 8010
 - 将用户和人脸特征对应起来
 - 后续识别时从这里读取特征进行比对
 
-### 3. `attendance_records`
+### 4. `attendance_records`
 
 考勤记录表，存储识别成功或考勤相关流水。
 
@@ -421,22 +511,31 @@ face3/
 ├── env.json
 ├── README.md
 ├── data/
-│   └── face3.db
+│   ├── face3.db
+│   └── member_roster.csv
 ├── scripts/
 │   ├── camera/
 │   │   └── camera.py
 │   ├── config/
 │   │   └── config.py
-│   └── database/
+│   ├── database/
 │       ├── __init__.py
 │       ├── demo.py
 │       └── sqlite_db.py
+│   └── web/
+│       ├── account_security.py
+│       ├── portal_submission_service.py
+│       ├── registration_validation.py
+│       └── roster_import_service.py
 ├── static/
 │   └── css/
 │       └── site.css
 └── templates/
     ├── admin_dashboard.html
     ├── base.html
+    ├── portal_home.html
+    ├── portal_login.html
+    ├── portal_register.html
     └── user_screen.html
 ```
 
@@ -450,10 +549,11 @@ face3/
 - `templates/`：前端页面模板
 - `static/`：静态资源
 - `data/`：本地数据库及后续人脸图片、快照等数据目录
+- `data/member_roster.csv`：管理员预置成员名单与初始密码来源
 
 ## 七、前端页面设计说明
 
-当前只要求先完成界面设计，不要求业务功能接通，因此当前页面全部使用模拟数据渲染。
+当前项目既包含原型展示页，也已经开始接通部分真实业务页。
 
 ### 1. 待识别用户页的定位
 
@@ -496,6 +596,26 @@ face3/
 - 终端在线状态监控
 - 权限角色管理
 
+### 3. 外网用户门户页的定位
+
+这是面向单位内部普通成员的外网入口。
+
+设计重点：
+
+- 与树莓派终端识别页彻底分离
+- 首次注册只允许名单内成员进入
+- 初始密码只用于首次注册，不用于后续登录
+- 登录后才能做人脸资料现场拍摄
+
+目前页面上已接通的能力包括：
+
+- 首次注册
+- 正式密码登录
+- Session 登录态
+- 用户中心状态展示
+- 单图人脸质量校验
+- 人脸编码提取和 `face_profiles` 入库
+
 ## 八、开发任务流
 
 当前项目建议按以下四个主任务流推进。
@@ -534,7 +654,9 @@ face3/
 
 当前状态：
 
-- 未正式开始
+- 已完成“名单导入 -> 首次注册改密 -> 正式登录 -> 现场拍照/备用选图 -> 单图入库”的最小闭环
+- 独立 Funnel 动作挑战页仍保留，用于后续升级成更严格的公网采集入口
+- 实时识别与考勤写入尚未接通
 
 真实业务中的常见处理方式：
 
@@ -736,15 +858,81 @@ source .venv/bin/activate
 ### 3. 启动 FastAPI 页面
 
 ```bash
-.venv/bin/uvicorn main:app --reload
+.venv/bin/uvicorn main:app --host 0.0.0.0 --port 5000 --reload
 ```
 
 页面访问地址：
 
-- `http://127.0.0.1:8000/`
-- `http://127.0.0.1:8000/admin`
+- `http://127.0.0.1:5000/`
+- `http://127.0.0.1:5000/admin`
+- `http://127.0.0.1:5000/portal/register`
+- `http://127.0.0.1:5000/portal/login`
+- `http://127.0.0.1:5000/portal/home`
+- `http://127.0.0.1:5000/portal/face`
 
-### 4. 初始化数据库
+### 4. 外网用户门户首次使用说明
+
+1. 先编辑 [data/member_roster.csv](/home/luck/face3/data/member_roster.csv)，维护单位成员姓名、学号/工号、角色、初始密码和状态。
+2. 启动服务后，系统会在 startup 阶段自动把名单同步到 `roster_members`。
+3. 用户访问 `/portal/register`，使用管理员分发的初始密码完成首次注册，并设置新密码。
+4. 首次注册成功后，系统会自动跳转到 `/portal/face` 现场拍摄人脸资料。
+5. 后续登录统一访问 `/portal/login`，只使用新密码。
+
+### 5. 外网访问方式
+
+当前项目最适合的外网访问方式是把整个主应用端口暴露出去，而不是只暴露单独测试页。
+
+推荐方式一：Tailscale Funnel
+
+先启动主应用：
+
+```bash
+.venv/bin/uvicorn main:app --host 0.0.0.0 --port 5000 --reload
+```
+
+再开 Funnel：
+
+```bash
+sudo tailscale funnel 5000
+```
+
+执行成功后，Tailscale 会返回一个公网地址，例如：
+
+```text
+https://<你的设备名>.<随机后缀>.ts.net
+```
+
+此时外网访问方式就是把本地地址替换成这个公网域名：
+
+- 终端页：`https://<你的域名>/`
+- 管理后台：`https://<你的域名>/admin`
+- 首次注册页：`https://<你的域名>/portal/register`
+- 登录页：`https://<你的域名>/portal/login`
+- 用户中心：`https://<你的域名>/portal/home`
+- 人脸上传页：`https://<你的域名>/portal/face`
+
+说明：
+
+- `/` 是树莓派终端识别页，主要给现场设备使用
+- `/portal/*` 是外网用户门户，给成员在手机或电脑浏览器访问
+- 如果用户未登录，直接访问 `/portal/home` 或 `/portal/face` 会自动跳到 `/portal/login`
+
+推荐方式二：内网穿透或反向代理
+
+如果你不用 Tailscale，也可以把 `5000` 端口通过下面任一方式暴露到公网：
+
+- 路由器端口映射
+- `frp`
+- `nginx` 反向代理 + 公网域名
+- 云服务器反向代理回树莓派
+
+无论你用哪种方式，最终都要把公网流量转发到：
+
+```text
+http://树莓派IP:5000
+```
+
+### 6. 初始化数据库
 
 如果只想验证 SQLite 是否可用，可以执行：
 

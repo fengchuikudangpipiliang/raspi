@@ -21,6 +21,7 @@ PITCH_RATIO_MAX = 0.78
 PRESENTATION_RECT_AREA_MIN_RATIO = 0.10
 PRESENTATION_PERIODIC_RATIO_MIN = 9.5
 PRESENTATION_GLARE_RATIO_MIN = 0.03
+DETECTION_MAX_WIDTH = 480
 
 
 @dataclass
@@ -276,6 +277,10 @@ class RegistrationValidationPipeline:
         ]
 
     def validate(self, image_bytes: bytes) -> tuple[bool, list[ValidationResult]]:
+        _, passed, results = self.validate_with_context(image_bytes)
+        return passed, results
+
+    def validate_with_context(self, image_bytes: bytes) -> tuple[ValidationContext, bool, list[ValidationResult]]:
         context = build_context(image_bytes)
         results: list[ValidationResult] = []
 
@@ -285,7 +290,7 @@ class RegistrationValidationPipeline:
             if not result.passed and validator.name == "face_count":
                 break
 
-        return all(result.passed for result in results), results
+        return context, all(result.passed for result in results), results
 
 
 def build_context(image_bytes: bytes) -> ValidationContext:
@@ -300,7 +305,31 @@ def build_context(image_bytes: bytes) -> ValidationContext:
 
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     height, width = image_bgr.shape[:2]
-    face_locations = face_recognition.face_locations(image_rgb, model="hog")
+    detect_rgb = image_rgb
+    detect_scale = 1.0
+    if width > DETECTION_MAX_WIDTH:
+        detect_scale = DETECTION_MAX_WIDTH / float(width)
+        detect_width = max(1, int(width * detect_scale))
+        detect_height = max(1, int(height * detect_scale))
+        detect_rgb = cv2.resize(
+            image_rgb,
+            (detect_width, detect_height),
+            interpolation=cv2.INTER_AREA,
+        )
+
+    detected_locations = face_recognition.face_locations(detect_rgb, model="hog")
+    if detect_scale != 1.0:
+        face_locations = [
+            (
+                int(round(top / detect_scale)),
+                int(round(right / detect_scale)),
+                int(round(bottom / detect_scale)),
+                int(round(left / detect_scale)),
+            )
+            for top, right, bottom, left in detected_locations
+        ]
+    else:
+        face_locations = detected_locations
     face_landmarks = face_recognition.face_landmarks(image_rgb, face_locations) if face_locations else []
     return ValidationContext(image_bytes, image_bgr, image_rgb, width, height, face_locations, face_landmarks)
 

@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+
+{% block body_class %}portal-body{% endblock %}
+
+{% block content %}
+<main class="portal-shell">
+    <div class="container py-4 py-lg-5">
+        <section class="portal-hero mb-4">
+            <div>
+                <div class="eyebrow">Face3 Public Portal</div>
+                <h1 class="display-6 fw-bold mb-2">首次注册</h1>
+                <p class="hero-copy mb-0">使用管理员提前分配的学号/工号、姓名和初始密码完成首次注册，并在此时设置你的正式登录密码。</p>
+            </div>
+            <div class="portal-actions">
+                <a class="btn btn-outline-light btn-soft" href="{{ url_for('user_screen') }}">终端页</a>
+                <a class="btn btn-warning btn-soft" href="{{ url_for('portal_login_page') }}">已有账号去登录</a>
+            </div>
+        </section>
+
+        <div class="row g-4">
+            <div class="col-lg-7">
+                <section class="portal-card">
+                    <div class="panel-head">
+                        <div>
+                            <h2>注册信息</h2>
+                            <p>首次注册会校验预置名单、初始密码和姓名是否匹配。</p>
+                        </div>
+                    </div>
+                    <form class="portal-form" id="register-form">
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label" for="full_name">姓名</label>
+                                <input class="form-control portal-input" id="full_name" name="full_name" maxlength="40" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label" for="code">学号/工号</label>
+                                <input class="form-control portal-input" id="code" name="code" maxlength="40" required>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label" for="initial_password">初始密码</label>
+                                <input class="form-control portal-input" id="initial_password" name="initial_password" type="password" maxlength="64" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label" for="new_password">新密码</label>
+                                <input class="form-control portal-input" id="new_password" name="new_password" type="password" maxlength="64" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label" for="confirm_password">确认新密码</label>
+                                <input class="form-control portal-input" id="confirm_password" name="confirm_password" type="password" maxlength="64" required>
+                            </div>
+                        </div>
+                        <div class="portal-alert mt-3 d-none" id="register-alert"></div>
+                        <div class="d-flex flex-wrap gap-3 mt-4">
+                            <button class="btn btn-warning btn-soft" id="register-submit" type="submit">完成首次注册</button>
+                            <a class="btn btn-outline-light btn-soft" href="{{ url_for('portal_login_page') }}">返回登录</a>
+                        </div>
+                    </form>
+                </section>
+            </div>
+
+            <div class="col-lg-5">
+                <section class="portal-card h-100">
+                    <div class="panel-head">
+                        <div>
+                            <h2>注册规则</h2>
+                            <p>这部分用于降低冒名注册和弱密码风险。</p>
+                        </div>
+                    </div>
+                    <div class="portal-tips">
+                        <div class="portal-tip-item">
+                            <strong>1. 必须在名单内</strong>
+                            <span>只有管理员预置到本地名单里的成员才能注册。</span>
+                        </div>
+                        <div class="portal-tip-item">
+                            <strong>2. 初始密码只用一次</strong>
+                            <span>注册成功后，后续登录只认你设置的新密码。</span>
+                        </div>
+                        <div class="portal-tip-item">
+                            <strong>3. 下一步还要上传人脸</strong>
+                            <span>首次注册完成后会自动跳到人脸资料上传页。</span>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </div>
+</main>
+
+<script>
+    const registerForm = document.getElementById("register-form");
+    const registerAlert = document.getElementById("register-alert");
+    const registerSubmit = document.getElementById("register-submit");
+
+    function showRegisterAlert(message, isSuccess = false) {
+        registerAlert.textContent = message;
+        registerAlert.classList.remove("d-none", "alert-error", "alert-success");
+        registerAlert.classList.add(isSuccess ? "alert-success" : "alert-error");
+    }
+
+    registerForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        registerSubmit.disabled = true;
+        showRegisterAlert("正在校验名单与初始密码，请稍候。", true);
+
+        const payload = {
+            full_name: registerForm.full_name.value,
+            code: registerForm.code.value,
+            initial_password: registerForm.initial_password.value,
+            new_password: registerForm.new_password.value,
+            confirm_password: registerForm.confirm_password.value,
+        };
+
+        try {
+            const response = await fetch("{{ url_for('portal_register') }}", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            const result = await response.json();
+            if (!response.ok || !result.ok) {
+                throw new Error(result.message || "首次注册失败。");
+            }
+            showRegisterAlert(result.message, true);
+            window.setTimeout(() => {
+                window.location.href = result.redirect_url || "{{ url_for('portal_face_page') }}";
+            }, 600);
+        } catch (error) {
+            showRegisterAlert(error.message || "首次注册失败。");
+        } finally {
+            registerSubmit.disabled = false;
+        }
+    });
+</script>
+{% endblock %}

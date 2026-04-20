@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+
+{% block body_class %}portal-body{% endblock %}
+
+{% block content %}
+<main class="portal-shell">
+    <div class="container py-4 py-lg-5">
+        <section class="portal-hero mb-4">
+            <div>
+                <div class="eyebrow">Face3 Public Portal</div>
+                <h1 class="display-6 fw-bold mb-2">用户登录</h1>
+                <p class="hero-copy mb-0">首次注册完成后，后续登录统一使用你设置的新密码，不再使用管理员发放的初始密码。</p>
+            </div>
+            <div class="portal-actions">
+                <a class="btn btn-outline-light btn-soft" href="{{ url_for('user_screen') }}">终端页</a>
+                <a class="btn btn-warning btn-soft" href="{{ url_for('portal_register_page') }}">还没注册</a>
+            </div>
+        </section>
+
+        <div class="row g-4">
+            <div class="col-lg-6">
+                <section class="portal-card">
+                    <div class="panel-head">
+                        <div>
+                            <h2>登录账号</h2>
+                            <p>登录后可进入个人主页和人脸资料上传页。</p>
+                        </div>
+                    </div>
+                    <form class="portal-form" id="login-form">
+                        <div class="row g-3">
+                            <div class="col-12">
+                                <label class="form-label" for="code">学号/工号</label>
+                                <input class="form-control portal-input" id="code" name="code" maxlength="40" required>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label" for="password">密码</label>
+                                <input class="form-control portal-input" id="password" name="password" type="password" maxlength="64" required>
+                            </div>
+                        </div>
+                        <div class="portal-alert mt-3 d-none" id="login-alert"></div>
+                        <div class="d-flex flex-wrap gap-3 mt-4">
+                            <button class="btn btn-warning btn-soft" id="login-submit" type="submit">登录门户</button>
+                            <a class="btn btn-outline-light btn-soft" href="{{ url_for('portal_register_page') }}">首次注册</a>
+                        </div>
+                    </form>
+                </section>
+            </div>
+
+            <div class="col-lg-6">
+                <section class="portal-card h-100">
+                    <div class="panel-head">
+                        <div>
+                            <h2>登录后可以做什么</h2>
+                            <p>当前先打通个人入口，后续再逐步接审批和历史记录。</p>
+                        </div>
+                    </div>
+                    <div class="portal-tips">
+                        <div class="portal-tip-item">
+                            <strong>查看个人状态</strong>
+                            <span>确认自己是否已经完成人脸资料上传。</span>
+                        </div>
+                        <div class="portal-tip-item">
+                            <strong>上传注册照</strong>
+                            <span>提交清晰正脸照片，系统会校验质量并提取编码。</span>
+                        </div>
+                        <div class="portal-tip-item">
+                            <strong>后续扩展空间</strong>
+                            <span>之后可以继续接考勤历史、异常申诉和密码修改。</span>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </div>
+</main>
+
+<script>
+    const loginForm = document.getElementById("login-form");
+    const loginAlert = document.getElementById("login-alert");
+    const loginSubmit = document.getElementById("login-submit");
+
+    function showLoginAlert(message, isSuccess = false) {
+        loginAlert.textContent = message;
+        loginAlert.classList.remove("d-none", "alert-error", "alert-success");
+        loginAlert.classList.add(isSuccess ? "alert-success" : "alert-error");
+    }
+
+    loginForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        loginSubmit.disabled = true;
+        showLoginAlert("正在验证账号信息，请稍候。", true);
+
+        const payload = {
+            code: loginForm.code.value,
+            password: loginForm.password.value,
+        };
+
+        try {
+            const response = await fetch("{{ url_for('portal_login') }}", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            const result = await response.json();
+            if (!response.ok || !result.ok) {
+                throw new Error(result.message || "登录失败。");
+            }
+            showLoginAlert(result.message, true);
+            window.setTimeout(() => {
+                window.location.href = result.redirect_url || "{{ url_for('portal_home_page') }}";
+            }, 500);
+        } catch (error) {
+            showLoginAlert(error.message || "登录失败。");
+        } finally {
+            loginSubmit.disabled = false;
+        }
+    });
+</script>
+{% endblock %}

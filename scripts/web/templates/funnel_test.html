@@ -706,6 +706,19 @@
             messageBox.className = "message";
         }
 
+        async function readJsonResponse(response, emptyMessage) {
+            const text = await response.text();
+            if (!text) {
+                throw new Error(emptyMessage || `服务返回空响应（HTTP ${response.status}）。`);
+            }
+
+            try {
+                return JSON.parse(text);
+            } catch (error) {
+                throw new Error(`服务返回了无法解析的数据（HTTP ${response.status}）。`);
+            }
+        }
+
         function updatePreview(mode, dataUrl) {
             previewData = dataUrl || "";
             previewImage.classList.toggle("hidden", !previewData);
@@ -875,7 +888,7 @@
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ image_data: downscaleCurrentFrame() }),
                 });
-                const result = await response.json();
+                const result = await readJsonResponse(response, "动作挑战接口没有返回内容，请查看服务端日志。");
                 renderChallengeSteps(result.steps);
 
                 const tone = result.passed ? "pass" : (response.ok ? "working" : "fail");
@@ -961,7 +974,7 @@
 
             try {
                 const response = await fetch("/api/liveness/challenges", { method: "POST" });
-                const result = await response.json();
+                const result = await readJsonResponse(response, "动作挑战创建接口没有返回内容，请查看服务端日志。");
                 if (!response.ok || !result.ok) {
                     throw new Error(result.message || "无法创建动作挑战。");
                 }
@@ -1027,7 +1040,7 @@
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload),
                 });
-                const result = await response.json();
+                const result = await readJsonResponse(response, "资料提交接口没有返回内容，请查看服务端日志。");
                 renderValidationResults(result.validation_results);
 
                 if (!response.ok || !result.ok) {

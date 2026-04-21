@@ -1,10 +1,16 @@
 import threading
 import time
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
 
 import cv2
 import numpy as np
 
 from scripts.config.config import cfg
+from scripts.database.sqlite_db import AttendanceRepository
+from scripts.camera.strict_face_recognition import StrictFaceRecognizer
+from scripts.camera.strict_face_recognition import RecognitionResult
 
 try:
     import face_recognition
@@ -26,6 +32,23 @@ class VideoCamera:
         self.last_frame_at = None
         self.last_opened_at = None
         self.last_error = None
+        self.repo = AttendanceRepository()
+        self.snapshots_dir = Path(cfg.snapshots_dir)
+        self.snapshots_dir.mkdir(parents=True, exist_ok=True)
+        self.recognizer = None
+        self.recognition_result: Optional[RecognitionResult] = None
+        self.recognition_reload_interval_seconds = 60.0
+        self.next_recognition_reload_at = 0.0
+        self.last_attendance_record = None
+        self.last_attendance_message = "等待识别"
+
+        try:
+            self.recognizer = StrictFaceRecognizer()
+            self.recognizer.reload_known_faces()
+            self.next_recognition_reload_at = time.time() + self.recognition_reload_interval_seconds
+        except Exception as error:
+            self.recognizer = None
+            self.last_error = f"recognizer_init_failed: {error}"
 
     def start(self):
         if self.running:
@@ -105,22 +128,125 @@ class VideoCamera:
 
     def _process_frame(self, frame):
         frame = cv2.resize(frame, (cfg.camera_width, cfg.camera_height))
+        if self.recognizer is None:
+            self._update_face_locations(frame)
+            self._draw_face_boxes(frame)
+            self._draw_hud(frame)
+            return frame
 
-        if cfg.camera_mirror:
-            frame = cv2.flip(frame, 1)
+        frame = self.recognizer.prepare_frame(frame)
+        self._maybe_reload_recognizer()
+        self._update_recognition(frame)
+        rendered = self.recognizer.annotate_frame(frame, self.recognition_result)
+        self._draw_hud(rendered)
+        return rendered
 
-        if cfg.camera_rotate in {90, 180, 270}:
-            rotate_map = {
-                90: cv2.ROTATE_90_CLOCKWISE,
-                180: cv2.ROTATE_180,
-                270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+    def _maybe_reload_recognizer(self):
+        if self.recognizer is None:
+            return
+        now = time.time()
+        if now < self.next_recognition_reload_at:
+            return
+        try:
+            count = self.recognizer.reload_known_faces()
+            self.last_attendance_message = f"已加载 {count} 份人脸档案"
+            self.last_error = None
+        except Exception as error:
+            self.last_error = f"recognizer_reload_failed: {error}"
+        finally:
+            self.next_recognition_reload_at = now + self.recognition_reload_interval_seconds
+
+    def _update_recognition(self, frame):
+        if self.recognizer is None:
+            self.face_locations = []
+            self.recognition_result = None
+            return
+
+        self.frame_count += 1
+        detect_every = max(cfg.detect_every_n_frames, 1)
+        if self.frame_count % detect_every == 0:
+            try:
+                self.recognition_result = self.recognizer.process_frame(
+                    frame,
+                    now=time.time(),
+                    frame_already_normalized=True,
+                )
+                self.last_error = None
+            except Exception as error:
+                self.recognition_result = None
+                self.face_locations = []
+                self.last_error = f"recognition_failed: {error}"
+                return
+
+            if self.recognition_result and self.recognition_result.location:
+                self.face_locations = [self.recognition_result.location]
+            else:
+                self.face_locations = []
+
+            self._update_recognition_status()
+            if self.recognition_result and self.recognition_result.attendance_ready:
+                self._record_attendance(frame, self.recognition_result)
+            return
+
+        if self.recognition_result and self.recognition_result.location:
+            self.face_locations = [self.recognition_result.location]
+        else:
+            self.face_locations = []
+
+    def _update_recognition_status(self):
+        result = self.recognition_result
+        if result is None:
+            self.last_attendance_message = "等待识别"
+            return
+        if result.attendance_ready and result.name and result.code:
+            self.last_attendance_message = f"签到成功候选: {result.name}/{result.code}"
+            return
+        if result.recognized and result.name and result.code:
+            self.last_attendance_message = (
+                f"{result.name}/{result.code} 稳定帧 {result.stable_count}/{result.required_count}"
+            )
+            return
+        self.last_attendance_message = result.reason
+
+    def _record_attendance(self, frame, result: RecognitionResult):
+        if self.recognizer is None or result.user_id is None:
+            return
+
+        try:
+            snapshot_path = self._save_snapshot(frame, result)
+            attendance_id = self.repo.create_attendance_record(
+                user_id=result.user_id,
+                check_type="check_in",
+                snapshot_path=snapshot_path,
+                confidence=result.confidence,
+            )
+            self.recognizer.mark_attendance_committed(result.user_id, result.timestamp)
+            self.last_attendance_record = {
+                "attendance_id": attendance_id,
+                "user_id": result.user_id,
+                "name": result.name,
+                "code": result.code,
+                "confidence": result.confidence,
+                "snapshot_path": snapshot_path,
             }
-            frame = cv2.rotate(frame, rotate_map[cfg.camera_rotate])
+            self.last_attendance_message = f"签到成功: {result.name}/{result.code}"
+            self.last_error = None
+        except Exception as error:
+            self.last_error = f"attendance_write_failed: {error}"
+            self.last_attendance_message = "签到写入失败"
 
-        self._update_face_locations(frame)
-        self._draw_face_boxes(frame)
-        self._draw_hud(frame)
-        return frame
+    def _save_snapshot(self, frame, result: RecognitionResult) -> str:
+        date_dir = self.snapshots_dir / datetime.now().strftime("%Y%m%d")
+        date_dir.mkdir(parents=True, exist_ok=True)
+        safe_code = (result.code or "unknown").replace("/", "_")
+        file_name = f"{datetime.now().strftime('%Y%m%d%H%M%S')}-{safe_code}.jpg"
+        file_path = date_dir / file_name
+        if not cv2.imwrite(str(file_path), frame):
+            raise RuntimeError("snapshot_save_failed")
+        try:
+            return str(file_path.relative_to(Path.cwd()))
+        except ValueError:
+            return str(file_path)
 
     def _update_face_locations(self, frame):
         self.frame_count += 1
@@ -176,11 +302,20 @@ class VideoCamera:
         status_text = f"faces: {face_count}"
         tips_text = "streaming" if self.capture is not None and self.capture.isOpened() else "offline"
 
-        cv2.rectangle(frame, (16, 16), (188, 92), (9, 17, 31), -1)
-        cv2.rectangle(frame, (16, 16), (188, 92), (84, 243, 255), 1)
+        cv2.rectangle(frame, (16, 16), (420, 116), (9, 17, 31), -1)
+        cv2.rectangle(frame, (16, 16), (420, 116), (84, 243, 255), 1)
         cv2.putText(frame, "face3 terminal", (28, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (238, 244, 255), 1)
         cv2.putText(frame, status_text, (28, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (93, 226, 165), 2)
         cv2.putText(frame, tips_text, (28, 84), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 207, 102), 1)
+        cv2.putText(
+            frame,
+            self.last_attendance_message[:42],
+            (28, 106),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (238, 244, 255),
+            1,
+        )
 
     def _encode_frame(self, frame):
         success, jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])

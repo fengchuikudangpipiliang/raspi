@@ -49,6 +49,9 @@ class DeviceStatusService:
                 "last_opened_at": self._iso_from_timestamp(self.camera.last_opened_at),
                 "last_error": self.camera.last_error,
                 "detected_faces": len(getattr(self.camera, "face_locations", []) or []),
+                "known_faces_count": 0 if getattr(self.camera, "recognizer", None) is None else self.camera.recognizer.known_faces_count(),
+                "last_attendance_message": getattr(self.camera, "last_attendance_message", None),
+                "last_attendance_record": getattr(self.camera, "last_attendance_record", None),
             },
             "files": {
                 "roster_exists": Path(cfg.member_roster_path).exists(),

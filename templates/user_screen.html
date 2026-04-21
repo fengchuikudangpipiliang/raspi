@@ -129,40 +129,70 @@
     const streamTitle = document.getElementById("stream-title");
     const defaultLabel = "{{ data.status_label }}";
     const defaultText = "{{ data.status_text }}";
-    const videoFeedUrl = "{{ url_for('video_feed') }}";
-    const healthzUrl = "{{ url_for('healthz') }}";
+    const videoFeedPath = "{{ url_for('video_feed') }}";
+    const healthzPath = "{{ url_for('healthz') }}";
+    const videoFeedUrl = new URL(videoFeedPath, window.location.href).toString();
+    const healthzUrl = new URL(healthzPath, window.location.href).toString();
 
     let backendOnline = true;
+    let streamAvailable = true;
+    let healthFailureCount = 0;
+    let streamRetryTimerId = null;
+
+    function updateStreamUi() {
+        if (!backendOnline) {
+            streamTitle.textContent = "服务连接已断开";
+            return;
+        }
+        streamTitle.textContent = streamAvailable ? "实时识别画面" : "视频流连接异常，正在重试";
+    }
 
     function setUiState(isOnline) {
         backendOnline = isOnline;
         cameraStage.classList.toggle("camera-stage-offline", !isOnline);
         statusBubble.classList.toggle("status-bubble-offline", !isOnline);
         liveDot.classList.toggle("live-dot-offline", !isOnline);
+        updateStreamUi();
 
         if (isOnline) {
-            streamTitle.textContent = "实时识别画面";
             statusLabel.textContent = defaultLabel;
             statusText.textContent = defaultText;
             return;
         }
 
-        streamTitle.textContent = "服务连接已断开";
         statusLabel.textContent = "离线";
         statusText.textContent = "后台服务已停止，请重新启动系统服务";
+    }
+
+    function setStreamAvailableState(isAvailable) {
+        streamAvailable = isAvailable;
+        updateStreamUi();
     }
 
     function refreshVideoStream() {
         cameraStream.src = `${videoFeedUrl}?t=${Date.now()}`;
     }
 
+    function scheduleVideoRetry() {
+        if (streamRetryTimerId !== null) {
+            window.clearTimeout(streamRetryTimerId);
+        }
+        streamRetryTimerId = window.setTimeout(() => {
+            streamRetryTimerId = null;
+            if (backendOnline) {
+                refreshVideoStream();
+            }
+        }, 1500);
+    }
+
     async function checkBackend() {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
 
         try {
             const response = await fetch(`${healthzUrl}?t=${Date.now()}`, {
                 cache: "no-store",
+                credentials: "same-origin",
                 signal: controller.signal,
             });
             clearTimeout(timeoutId);
@@ -171,21 +201,34 @@
                 throw new Error("health check failed");
             }
 
+            healthFailureCount = 0;
             if (!backendOnline) {
                 setUiState(true);
                 refreshVideoStream();
             }
         } catch (error) {
             clearTimeout(timeoutId);
-            setUiState(false);
+            healthFailureCount += 1;
+            if (healthFailureCount >= 3) {
+                setUiState(false);
+            }
         }
     }
 
+    cameraStream.addEventListener("load", () => {
+        setStreamAvailableState(true);
+    });
+
     cameraStream.addEventListener("error", () => {
-        setUiState(false);
+        setStreamAvailableState(false);
+        if (backendOnline) {
+            scheduleVideoRetry();
+        }
     });
 
     setUiState(true);
+    refreshVideoStream();
+    checkBackend();
     window.setInterval(checkBackend, 3000);
 </script>
 {% endblock %}

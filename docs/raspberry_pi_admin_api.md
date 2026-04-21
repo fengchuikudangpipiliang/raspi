@@ -770,3 +770,117 @@ Authorization: Bearer your-admin-token
 - [scripts/device_status_service.py](/home/luck/face3/scripts/device_status_service.py)
 - [scripts/database/sqlite_db.py](/home/luck/face3/scripts/database/sqlite_db.py)
 - [scripts/config/config.py](/home/luck/face3/scripts/config/config.py)
+
+## 13. 2026-04-21 增量变更记录
+
+这一节只写 **相对于上一版文档新增的变化**，方便 Windows 管理项目按增量适配。
+
+### 13.1 是否改动了 Windows 端原有接口
+
+没有改动已有接口的：
+
+- 路由路径
+- HTTP 方法
+- 鉴权方式
+- 主要返回结构外层格式
+
+也就是说，下面这些接口地址没有变：
+
+- `/api/admin/device/info`
+- `/api/admin/device/health`
+- `/api/admin/device/metrics`
+- `/api/admin/roster-members`
+- `/api/admin/users`
+- `/api/admin/users/{user_id}`
+- `/api/admin/face-profiles`
+- `/api/admin/attendance`
+- `/api/admin/attendance/today-summary`
+
+所以如果 Windows 那边已经按这些地址写请求，**请求本身不会失效**。
+
+### 13.2 本次属于“新增字段”，不是破坏性修改
+
+这次新增的是树莓派本地严格识别接入后带出来的状态字段，主要体现在：
+
+- `GET /api/admin/device/health`
+
+`data.camera` 下新增字段：
+
+- `known_faces_count`
+- `last_attendance_message`
+- `last_attendance_record`
+
+新增字段示例：
+
+```json
+{
+  "camera": {
+    "configured": true,
+    "running": true,
+    "last_frame_at": "2026-04-21T09:30:10+08:00",
+    "last_opened_at": "2026-04-21T09:28:00+08:00",
+    "last_error": null,
+    "detected_faces": 1,
+    "known_faces_count": 3,
+    "last_attendance_message": "签到成功: 张三/S2026001",
+    "last_attendance_record": {
+      "attendance_id": 15,
+      "user_id": 2,
+      "name": "张三",
+      "code": "S2026001",
+      "confidence": 0.93,
+      "snapshot_path": "data/snapshots/20260421/20260421093010-S2026001.jpg"
+    }
+  }
+}
+```
+
+说明：
+
+- `known_faces_count`：当前树莓派终端已加载到内存中的可识别人脸档案数量
+- `last_attendance_message`：最近一次识别状态提示，适合 Windows 后台首页直接显示
+- `last_attendance_record`：最近一次真正写入成功的考勤记录摘要
+
+### 13.3 本次新增的运行行为
+
+树莓派本地终端识别现在已经接入严格识别流程。
+
+新增行为：
+
+- 本地摄像头会对已注册用户做严格人脸识别
+- 满足稳定识别条件后，会自动写入 `attendance_records`
+- 同时自动保存一张考勤快照到 `data/snapshots/...`
+
+这意味着 Windows 端已有的下面两个接口，现在会开始读到真实新增数据：
+
+- `GET /api/admin/attendance`
+- `GET /api/admin/attendance/today-summary`
+
+如果 Windows 后台之前已经实现了考勤记录列表和今日汇总页面，那么现在它们应该会自然看到新识别产生的数据，不需要改请求地址。
+
+### 13.4 Windows 端是否一定能接收到
+
+结论：
+
+- 如果 Windows 端只是按接口地址发请求并读取已有字段，那么**可以继续正常工作**
+- 如果 Windows 端对 JSON 做了“严格字段白名单反序列化”，那就需要把新增字段设为可选字段
+
+最稳妥的建议：
+
+- Windows 端数据模型对 `device/health` 的 `camera` 对象使用“可选字段兼容”
+- 不要要求返回 JSON 必须和旧版字段完全一致
+
+推荐把下面 3 个字段在 Windows 端定义为可选：
+
+- `known_faces_count?: number`
+- `last_attendance_message?: string | null`
+- `last_attendance_record?: object | null`
+
+### 13.5 Windows 端 AI 需要重点知道的结论
+
+给 Windows 侧 AI 的一句话总结：
+
+- 本次没有改管理员 API 的路由和鉴权
+- 只是给 `/api/admin/device/health` 增加了几个可选字段
+- 树莓派本地终端现在会自动写入真实考勤记录和快照
+- 所以 Windows 侧只需要兼容新增字段，不需要重写原有请求层

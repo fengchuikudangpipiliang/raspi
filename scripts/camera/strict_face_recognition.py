@@ -205,7 +205,20 @@ class StrictFaceRecognizer:
         self._stable_count = 0
         self._last_stable_at = 0.0
 
-    def process_frame(self, frame_bgr: np.ndarray, now: Optional[float] = None) -> RecognitionResult:
+    def prepare_frame(self, frame_bgr: np.ndarray) -> np.ndarray:
+        """
+        统一对摄像头帧做镜像和旋转处理。
+        接入摄像头线程时可以先调这个函数，再把结果同时交给识别和画面输出。
+        """
+
+        return self._normalize_frame(frame_bgr)
+
+    def process_frame(
+        self,
+        frame_bgr: np.ndarray,
+        now: Optional[float] = None,
+        frame_already_normalized: bool = False,
+    ) -> RecognitionResult:
         """
         对单帧 BGR 图像做严格人脸识别。
         输入应直接来自 OpenCV 摄像头帧。
@@ -232,7 +245,8 @@ class StrictFaceRecognizer:
             self._last_result = result
             return result
 
-        frame_bgr = self._normalize_frame(frame_bgr)
+        if not frame_already_normalized:
+            frame_bgr = self._normalize_frame(frame_bgr)
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         height, width = frame_bgr.shape[:2]
 
@@ -384,7 +398,6 @@ class StrictFaceRecognizer:
             self._last_result = result
             return result
 
-        self._last_attendance_at[matched_profile.user_id] = timestamp
         result.ok = True
         result.reason = "attendance_ready"
         result.attendance_ready = True
@@ -432,6 +445,16 @@ class StrictFaceRecognizer:
 
     def known_faces_count(self) -> int:
         return len(self.known_profiles)
+
+    def mark_attendance_committed(self, user_id: int, timestamp: Optional[float] = None) -> None:
+        """
+        由外层在真正写入考勤记录成功后调用，开始该用户的冷却时间。
+        """
+
+        self._last_attendance_at[user_id] = float(timestamp or time.time())
+
+    def get_last_result(self) -> Optional[RecognitionResult]:
+        return self._last_result
 
     def _reset_on_failed_frame(self) -> None:
         self.reset_tracking()

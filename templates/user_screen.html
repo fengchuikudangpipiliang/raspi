@@ -37,19 +37,12 @@
                         >
                         {# 这一层是纯视觉氛围，不承载业务逻辑。 #}
                         <div class="camera-noise"></div>
-                        {# face-frame 是人脸取景框原型，后续可叠加真实检测框。 #}
-                        <div class="face-frame">
-                            <div class="frame-corner top-left"></div>
-                            <div class="frame-corner top-right"></div>
-                            <div class="frame-corner bottom-left"></div>
-                            <div class="frame-corner bottom-right"></div>
-                            <div class="scan-line"></div>
-                            <div class="frame-hint">请将面部保持在框内</div>
-                        </div>
-                        {# 状态气泡：后面可以替换成“识别中 / 成功 / 失败”等实时状态。 #}
-                        <div class="status-bubble" id="status-bubble">
-                            <span class="status-label" id="status-label">{{ data.status_label }}</span>
-                            <strong id="status-text">{{ data.status_text }}</strong>
+                        <div class="terminal-progress" id="terminal-progress">
+                            <span class="terminal-progress-label" id="terminal-progress-label">等待人脸</span>
+                            <span class="terminal-progress-detail" id="terminal-progress-detail">请单人正对镜头</span>
+                            <div class="terminal-progress-track">
+                                <span class="terminal-progress-fill" id="terminal-progress-fill"></span>
+                            </div>
                         </div>
                     </div>
                 </section>
@@ -122,15 +115,14 @@
 <script>
     const cameraStream = document.getElementById("camera-stream");
     const cameraStage = document.getElementById("camera-stage");
-    const statusBubble = document.getElementById("status-bubble");
-    const statusLabel = document.getElementById("status-label");
-    const statusText = document.getElementById("status-text");
     const liveDot = document.getElementById("live-dot");
     const streamTitle = document.getElementById("stream-title");
-    const defaultLabel = "{{ data.status_label }}";
-    const defaultText = "{{ data.status_text }}";
+    const terminalProgressLabel = document.getElementById("terminal-progress-label");
+    const terminalProgressDetail = document.getElementById("terminal-progress-detail");
+    const terminalProgressFill = document.getElementById("terminal-progress-fill");
     const videoFeedPath = "{{ url_for('video_feed') }}";
     const healthzPath = "{{ url_for('healthz') }}";
+    const terminalStatusUrl = new URL("/api/terminal/status", window.location.href).toString();
     const videoFeedUrl = new URL(videoFeedPath, window.location.href).toString();
     const healthzUrl = new URL(healthzPath, window.location.href).toString();
 
@@ -150,18 +142,8 @@
     function setUiState(isOnline) {
         backendOnline = isOnline;
         cameraStage.classList.toggle("camera-stage-offline", !isOnline);
-        statusBubble.classList.toggle("status-bubble-offline", !isOnline);
         liveDot.classList.toggle("live-dot-offline", !isOnline);
         updateStreamUi();
-
-        if (isOnline) {
-            statusLabel.textContent = defaultLabel;
-            statusText.textContent = defaultText;
-            return;
-        }
-
-        statusLabel.textContent = "离线";
-        statusText.textContent = "后台服务已停止，请重新启动系统服务";
     }
 
     function setStreamAvailableState(isAvailable) {
@@ -171,6 +153,16 @@
 
     function refreshVideoStream() {
         cameraStream.src = `${videoFeedUrl}?t=${Date.now()}`;
+    }
+
+    function updateTerminalProgress(progress) {
+        if (!progress) {
+            return;
+        }
+        terminalProgressLabel.textContent = progress.label || "等待人脸";
+        terminalProgressDetail.textContent = progress.detail || "";
+        const percent = Math.max(0, Math.min(Number(progress.percent || 0), 100));
+        terminalProgressFill.style.width = `${percent}%`;
     }
 
     function scheduleVideoRetry() {
@@ -215,6 +207,24 @@
         }
     }
 
+    async function refreshTerminalStatus() {
+        try {
+            const response = await fetch(`${terminalStatusUrl}?t=${Date.now()}`, {
+                cache: "no-store",
+                credentials: "same-origin",
+            });
+            if (!response.ok) {
+                return;
+            }
+            const payload = await response.json();
+            if (payload && payload.progress) {
+                updateTerminalProgress(payload.progress);
+            }
+        } catch (error) {
+            // 终端小进度提示失败时保持上一状态，不影响主视频流。
+        }
+    }
+
     cameraStream.addEventListener("load", () => {
         setStreamAvailableState(true);
     });
@@ -229,6 +239,8 @@
     setUiState(true);
     refreshVideoStream();
     checkBackend();
+    refreshTerminalStatus();
     window.setInterval(checkBackend, 3000);
+    window.setInterval(refreshTerminalStatus, 1200);
 </script>
 {% endblock %}

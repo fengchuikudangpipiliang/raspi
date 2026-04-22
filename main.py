@@ -178,6 +178,20 @@ def healthz():
     return {"status": "ok", "camera_running": camera.running}
 
 
+@app.get("/api/terminal/status")
+def terminal_status():
+    """
+    终端页左上角小进度提示接口。
+    只返回轻量状态，避免给视频流增加额外负担。
+    """
+
+    return {
+        "ok": True,
+        "camera_running": camera.running,
+        "progress": camera.get_terminal_progress(),
+    }
+
+
 @app.get("/admin", response_class=HTMLResponse)
 def admin_dashboard(request: Request):
     """

@@ -77,6 +77,31 @@ class RecognitionResult:
         return payload
 
 
+REASON_DISPLAY = {
+    "not_started": "识别尚未开始",
+    "empty_frame": "当前帧为空",
+    "no_known_faces": "尚未加载已注册人脸档案",
+    "no_face": "未检测到人脸",
+    "multi_face": "检测到多张人脸，请保持单人入镜",
+    "face_detection_failed": "人脸检测失败",
+    "face_too_small": "人脸过小，请靠近摄像头",
+    "image_blurry": "画面偏模糊，请保持稳定",
+    "bad_lighting": "光线不合适，请调整亮度",
+    "landmarks_missing": "关键点提取失败，请正视镜头",
+    "landmarks_incomplete": "关键点不完整，请调整姿态",
+    "roll_too_large": "头部倾斜过大，请摆正头部",
+    "yaw_too_large": "侧脸角度过大，请正视镜头",
+    "pitch_bad": "抬头或低头幅度过大",
+    "face_encoding_failed": "人脸编码失败，请重试",
+    "unknown": "未匹配到已注册人脸",
+    "ambiguous_match": "匹配结果过近，请单人重新识别",
+    "match_not_stable_yet": "已匹配到身份，正在等待稳定帧",
+    "outside_attendance_window": "当前不在考勤时间段内",
+    "attendance_cooldown": "刚完成签到，请稍后再试",
+    "attendance_ready": "识别稳定，准备写入考勤",
+}
+
+
 class StrictFaceRecognizer:
     """
     严格版树莓派摄像头人脸识别器。
@@ -96,17 +121,17 @@ class StrictFaceRecognizer:
         face_distance_threshold: Optional[float] = None,
         match_required_times: Optional[int] = None,
         unknown_face_label: Optional[str] = None,
-        detection_scale: float = 0.5,
-        min_face_area_ratio: float = 0.10,
-        min_blur_score: float = 110.0,
-        brightness_min: float = 60.0,
-        brightness_max: float = 195.0,
-        max_roll_angle: float = 12.0,
-        max_yaw_offset: float = 0.18,
-        min_pitch_ratio: float = 0.32,
-        max_pitch_ratio: float = 0.78,
-        ambiguity_margin: float = 0.03,
-        stable_timeout_seconds: float = 1.2,
+        detection_scale: float = 0.6,
+        min_face_area_ratio: float = 0.03,
+        min_blur_score: float = 0.0,
+        brightness_min: float = 0.0,
+        brightness_max: float = 255.0,
+        max_roll_angle: float = 180.0,
+        max_yaw_offset: float = 1.0,
+        min_pitch_ratio: float = -1.0,
+        max_pitch_ratio: float = 2.0,
+        ambiguity_margin: float = 0.02,
+        stable_timeout_seconds: float = 1.8,
         attendance_cooldown_seconds: Optional[int] = None,
     ):
         if face_recognition is None:
@@ -284,53 +309,6 @@ class StrictFaceRecognizer:
             self._last_result = result
             return result
 
-        roi = self._extract_face_roi(frame_bgr, location)
-        result.blur_score = self._estimate_blur_score(roi)
-        if result.blur_score < self.min_blur_score:
-            result.reason = "image_blurry"
-            self._reset_on_failed_frame()
-            self._last_result = result
-            return result
-
-        result.brightness_score = self._estimate_brightness_score(roi)
-        if not (self.brightness_min <= result.brightness_score <= self.brightness_max):
-            result.reason = "bad_lighting"
-            self._reset_on_failed_frame()
-            self._last_result = result
-            return result
-
-        landmarks = face_recognition.face_landmarks(frame_rgb, [location])
-        if not landmarks:
-            result.reason = "landmarks_missing"
-            self._reset_on_failed_frame()
-            self._last_result = result
-            return result
-
-        try:
-            pose = self._calculate_pose_metrics(landmarks[0])
-        except ValueError:
-            result.reason = "landmarks_incomplete"
-            self._reset_on_failed_frame()
-            self._last_result = result
-            return result
-
-        result.pose = pose
-        if pose.roll_angle > self.max_roll_angle:
-            result.reason = "roll_too_large"
-            self._reset_on_failed_frame()
-            self._last_result = result
-            return result
-        if pose.yaw_offset > self.max_yaw_offset:
-            result.reason = "yaw_too_large"
-            self._reset_on_failed_frame()
-            self._last_result = result
-            return result
-        if not (self.min_pitch_ratio <= pose.pitch_ratio <= self.max_pitch_ratio):
-            result.reason = "pitch_bad"
-            self._reset_on_failed_frame()
-            self._last_result = result
-            return result
-
         encodings = face_recognition.face_encodings(
             frame_rgb,
             known_face_locations=[location],
@@ -406,42 +384,13 @@ class StrictFaceRecognizer:
 
     def annotate_frame(self, frame_bgr: np.ndarray, result: Optional[RecognitionResult] = None) -> np.ndarray:
         """
-        在图像上绘制识别结果，便于后续接摄像头页时调试。
+        当前终端页不再在实时视频上绘制调试 HUD。
+        这里只保留接口，便于后续需要时恢复调试叠加。
         """
 
         if frame_bgr is None or frame_bgr.size == 0:
             return frame_bgr
-        if result is None:
-            result = self._last_result
-        if result is None:
-            return frame_bgr
-
-        output = frame_bgr.copy()
-        top_bar = 112
-        cv2.rectangle(output, (12, 12), (438, top_bar), (9, 17, 31), -1)
-        cv2.rectangle(output, (12, 12), (438, top_bar), (84, 243, 255), 1)
-
-        title = "strict recognition"
-        status = result.reason
-        line2 = f"faces: {result.face_count} stable: {result.stable_count}/{result.required_count}"
-        if result.recognized:
-            line3 = f"{result.name} / {result.code} dist={result.distance:.3f}"
-        else:
-            line3 = "no confirmed identity"
-
-        if result.location:
-            top, right, bottom, left = result.location
-            color = (0, 200, 0) if result.attendance_ready else ((0, 180, 255) if result.recognized else (0, 80, 255))
-            cv2.rectangle(output, (left, top), (right, bottom), color, 2)
-            label = result.name if result.recognized else status
-            cv2.rectangle(output, (left, max(top - 26, 0)), (right, top), color, -1)
-            cv2.putText(output, label[:28], (left + 6, max(top - 8, 16)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (9, 17, 31), 2)
-
-        cv2.putText(output, title, (24, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (238, 244, 255), 2)
-        cv2.putText(output, status[:40], (24, 62), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (93, 226, 165), 2)
-        cv2.putText(output, line2[:50], (24, 84), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 207, 102), 1)
-        cv2.putText(output, line3[:52], (24, 104), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (238, 244, 255), 1)
-        return output
+        return frame_bgr.copy()
 
     def known_faces_count(self) -> int:
         return len(self.known_profiles)
@@ -455,6 +404,15 @@ class StrictFaceRecognizer:
 
     def get_last_result(self) -> Optional[RecognitionResult]:
         return self._last_result
+
+    def describe_reason(self, reason: str) -> str:
+        """
+        把内部原因码转成终端页可读的中文说明。
+        """
+
+        if reason == self.unknown_face_label:
+            return REASON_DISPLAY.get("unknown", str(reason))
+        return REASON_DISPLAY.get(reason, str(reason))
 
     def _reset_on_failed_frame(self) -> None:
         self.reset_tracking()

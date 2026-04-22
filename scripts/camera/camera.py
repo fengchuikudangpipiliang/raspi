@@ -559,17 +559,29 @@ class VideoCamera:
                 "detail": "请单人重试",
                 "percent": 50,
             }
-        if result.recognized and result.name and result.code:
-            return {
-                "label": "已匹配",
-                "detail": f"{result.name} / {result.code}",
-                "percent": 88,
-            }
         if result.attendance_ready:
             return {
                 "label": "准备签到",
                 "detail": "正在写入考勤",
                 "percent": 95,
+            }
+        if result.reason == "attendance_cooldown":
+            return {
+                "label": "已签到",
+                "detail": "刚完成签到，请稍后再试",
+                "percent": 100,
+            }
+        if result.reason == "outside_attendance_window":
+            return {
+                "label": "非考勤时段",
+                "detail": "当前不在允许签到时间内",
+                "percent": 90,
+            }
+        if result.recognized and result.name and result.code:
+            return {
+                "label": "已匹配",
+                "detail": f"{result.name} / {result.code}",
+                "percent": 88,
             }
 
         return {

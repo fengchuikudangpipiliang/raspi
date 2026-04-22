@@ -4,6 +4,6 @@ Table: sqlite_sequence
 +--------------------+-----+
 | users              | 2   |
 | face_profiles      | 2   |
-| attendance_records | 1   |
+| attendance_records | 22  |
 | roster_members     | 3   |
 +--------------------+-----+

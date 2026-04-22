@@ -1,5 +1,6 @@
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -62,6 +63,15 @@ CREATE INDEX IF NOT EXISTS idx_attendance_records_check_time ON attendance_recor
 """
 
 
+def local_now_text() -> str:
+    """
+    统一生成树莓派当前本地时区的时间文本。
+    数据库里统一写入这种本地时间字符串，避免 SQLite 的 CURRENT_TIMESTAMP 默认走 UTC。
+    """
+
+    return datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+
 class SQLiteDB:
     """
     SQLite 连接与建库底座。
@@ -115,6 +125,8 @@ class SQLiteDB:
             """
         )
         connection.execute("CREATE INDEX IF NOT EXISTS idx_roster_members_status ON roster_members(status)")
+        self._ensure_app_meta_table(connection)
+        self._migrate_legacy_utc_timestamps(connection)
 
     def _ensure_column(self, connection, table_name: str, column_name: str, alter_sql: str):
         if self.column_exists(connection, table_name, column_name):
@@ -124,6 +136,83 @@ class SQLiteDB:
     def column_exists(self, connection, table_name: str, column_name: str) -> bool:
         rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
         return any(row["name"] == column_name for row in rows)
+
+    def _ensure_app_meta_table(self, connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+
+    def _migrate_legacy_utc_timestamps(self, connection) -> None:
+        """
+        旧版本把 SQLite CURRENT_TIMESTAMP 直接写进库，得到的是 UTC 时间。
+        这里在首次升级时把这些“无时区但实际是 UTC”的历史记录平移到当前设备本地时间。
+        """
+
+        migration_key = "legacy_utc_timestamps_migrated_v1"
+        migrated = connection.execute(
+            "SELECT value FROM app_meta WHERE key = ?",
+            (migration_key,),
+        ).fetchone()
+        if migrated:
+            return
+
+        offset = datetime.now().astimezone().utcoffset()
+        shift_seconds = int(offset.total_seconds()) if offset else 0
+        if shift_seconds == 0:
+            connection.execute(
+                "INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)",
+                (migration_key, "skipped_zero_offset"),
+            )
+            return
+
+        shift_sql = self._build_sqlite_datetime_shift(shift_seconds)
+        targets = [
+            ("roster_members", "created_at"),
+            ("roster_members", "updated_at"),
+            ("users", "created_at"),
+            ("users", "password_changed_at"),
+            ("users", "last_login_at"),
+            ("face_profiles", "created_at"),
+            ("attendance_records", "check_time"),
+        ]
+        for table_name, column_name in targets:
+            connection.execute(
+                f"""
+                UPDATE {table_name}
+                SET {column_name} = datetime({column_name}, {shift_sql})
+                WHERE {column_name} IS NOT NULL AND {column_name} != ''
+                """
+            )
+
+        connection.execute(
+            "INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)",
+            (migration_key, f"shifted_{shift_seconds}_seconds"),
+        )
+
+    def _build_sqlite_datetime_shift(self, shift_seconds: int) -> str:
+        """
+        把秒数偏移转成 SQLite datetime 可接受的修饰参数。
+        """
+
+        sign = "+" if shift_seconds >= 0 else "-"
+        remaining = abs(int(shift_seconds))
+        hours, remaining = divmod(remaining, 3600)
+        minutes, seconds = divmod(remaining, 60)
+        modifiers: list[str] = []
+        if hours:
+            modifiers.append(f"'{sign}{hours} hours'")
+        if minutes:
+            modifiers.append(f"'{sign}{minutes} minutes'")
+        if seconds:
+            modifiers.append(f"'{sign}{seconds} seconds'")
+        if not modifiers:
+            modifiers.append("'+0 seconds'")
+        return ", ".join(modifiers)
 
 
 class AttendanceRepository:
@@ -141,13 +230,15 @@ class AttendanceRepository:
         return True
 
     def create_user(self, name, code, roster_member_id=None, password_hash=None):
+        now_text = local_now_text()
+        password_changed_at = now_text if password_hash else None
         with self.db.session() as connection:
             cursor = connection.execute(
                 """
-                INSERT INTO users (roster_member_id, name, code, password_hash, password_changed_at)
-                VALUES (?, ?, ?, ?, CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END)
+                INSERT INTO users (roster_member_id, name, code, password_hash, password_changed_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (roster_member_id, name, code, password_hash, password_hash),
+                (roster_member_id, name, code, password_hash, password_changed_at, now_text),
             )
             return cursor.lastrowid
 
@@ -156,6 +247,7 @@ class AttendanceRepository:
         用成员名单中的预置身份完成首次注册。
         如果库里已存在同编号但尚未设置密码的演示用户，则直接补齐账号字段，避免脏数据冲突。
         """
+        now_text = local_now_text()
         with self.db.session() as connection:
             existing = connection.execute(
                 """
@@ -173,19 +265,19 @@ class AttendanceRepository:
                 connection.execute(
                     """
                     UPDATE users
-                    SET roster_member_id = ?, name = ?, password_hash = ?, password_changed_at = CURRENT_TIMESTAMP
+                    SET roster_member_id = ?, name = ?, password_hash = ?, password_changed_at = ?
                     WHERE id = ?
                     """,
-                    (roster_member_id, name, password_hash, existing["id"]),
+                    (roster_member_id, name, password_hash, now_text, existing["id"]),
                 )
                 user_id = existing["id"]
             else:
                 cursor = connection.execute(
                     """
-                    INSERT INTO users (roster_member_id, name, code, password_hash, password_changed_at)
-                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    INSERT INTO users (roster_member_id, name, code, password_hash, password_changed_at, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (roster_member_id, name, code, password_hash),
+                    (roster_member_id, name, code, password_hash, now_text, now_text),
                 )
                 user_id = cursor.lastrowid
 
@@ -215,6 +307,7 @@ class AttendanceRepository:
         成员名单按 code 做幂等导入。
         返回 created / updated，方便启动阶段输出导入摘要。
         """
+        now_text = local_now_text()
         with self.db.session() as connection:
             existing = connection.execute(
                 "SELECT id FROM roster_members WHERE code = ?",
@@ -225,19 +318,19 @@ class AttendanceRepository:
                 connection.execute(
                     """
                     UPDATE roster_members
-                    SET name = ?, role = ?, status = ?, initial_password_hash = ?, updated_at = CURRENT_TIMESTAMP
+                    SET name = ?, role = ?, status = ?, initial_password_hash = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (name, role, status, initial_password_hash, existing["id"]),
+                    (name, role, status, initial_password_hash, now_text, existing["id"]),
                 )
                 return "updated"
 
             connection.execute(
                 """
-                INSERT INTO roster_members (name, code, role, status, initial_password_hash)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO roster_members (name, code, role, status, initial_password_hash, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (name, code, role, status, initial_password_hash),
+                (name, code, role, status, initial_password_hash, now_text, now_text),
             )
             return "created"
 
@@ -319,10 +412,11 @@ class AttendanceRepository:
             return dict(row) if row else None
 
     def touch_user_last_login(self, user_id: int) -> None:
+        now_text = local_now_text()
         with self.db.session() as connection:
             connection.execute(
-                "UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (user_id,),
+                "UPDATE users SET last_login_at = ? WHERE id = ?",
+                (now_text, user_id),
             )
 
     def list_users(self):
@@ -429,10 +523,11 @@ class AttendanceRepository:
             return dict(row) if row else None
 
     def save_face_profile(self, user_id, image_path, encoding):
+        now_text = local_now_text()
         with self.db.session() as connection:
             cursor = connection.execute(
-                "INSERT INTO face_profiles (user_id, image_path, encoding) VALUES (?, ?, ?)",
-                (user_id, image_path, encoding),
+                "INSERT INTO face_profiles (user_id, image_path, encoding, created_at) VALUES (?, ?, ?, ?)",
+                (user_id, image_path, encoding, now_text),
             )
             return cursor.lastrowid
 
@@ -517,41 +612,44 @@ class AttendanceRepository:
             return cursor.rowcount > 0
 
     def update_user_password_hash(self, user_id: int, password_hash: str) -> bool:
+        now_text = local_now_text()
         with self.db.session() as connection:
             cursor = connection.execute(
                 """
                 UPDATE users
-                SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP
+                SET password_hash = ?, password_changed_at = ?
                 WHERE id = ?
                 """,
-                (password_hash, user_id),
+                (password_hash, now_text, user_id),
             )
             return cursor.rowcount > 0
 
     def update_user_roster_status(self, user_id: int, status: str) -> bool:
+        now_text = local_now_text()
         with self.db.session() as connection:
             cursor = connection.execute(
                 """
                 UPDATE roster_members
-                SET status = ?, updated_at = CURRENT_TIMESTAMP
+                SET status = ?, updated_at = ?
                 WHERE id = (
                     SELECT roster_member_id
                     FROM users
                     WHERE id = ?
                 )
                 """,
-                (status, user_id),
+                (status, now_text, user_id),
             )
             return cursor.rowcount > 0
 
     def create_attendance_record(self, user_id, check_type="check_in", snapshot_path=None, confidence=None):
+        now_text = local_now_text()
         with self.db.session() as connection:
             cursor = connection.execute(
                 """
-                INSERT INTO attendance_records (user_id, check_type, snapshot_path, confidence)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO attendance_records (user_id, check_type, check_time, snapshot_path, confidence)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (user_id, check_type, snapshot_path, confidence),
+                (user_id, check_type, now_text, snapshot_path, confidence),
             )
             return cursor.lastrowid
 
@@ -574,7 +672,7 @@ class AttendanceRepository:
                 FROM attendance_records
                 JOIN users ON users.id = attendance_records.user_id
                 WHERE
-                    (? = '' OR date(attendance_records.check_time, 'localtime') = ?)
+                    (? = '' OR date(attendance_records.check_time) = ?)
                     AND (? = '' OR users.code = ?)
                     AND (? = '' OR users.name LIKE ?)
                 ORDER BY attendance_records.id DESC
@@ -619,7 +717,7 @@ class AttendanceRepository:
             attendance_clause = ""
             params: tuple = ()
             if date:
-                attendance_clause = "WHERE date(check_time, 'localtime') = ?"
+                attendance_clause = "WHERE date(check_time) = ?"
                 params = (date,)
 
             total_users_row = connection.execute("SELECT COUNT(*) AS total FROM users").fetchone()

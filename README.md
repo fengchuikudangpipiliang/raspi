@@ -958,6 +958,12 @@ sudo tailscale funnel 8010
 - 存放实际签到流水
 - 供后台页面查询和统计
 
+时间约定：
+
+- `created_at`、`updated_at`、`password_changed_at`、`last_login_at`、`check_time` 统一按设备当前本地时区写入
+- 当前默认按树莓派本机时区使用，不再直接依赖 SQLite `CURRENT_TIMESTAMP` 的 UTC 默认值
+- 这样可以避免后台看到的记录时间比实际时间少 8 小时
+
 ## 六、当前目录结构
 
 当前项目核心目录结构如下：

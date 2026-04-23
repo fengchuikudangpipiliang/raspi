@@ -41,10 +41,16 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 
 # 运行期基础服务统一放在入口层初始化，避免每个路由里重复创建。
 camera = VideoCamera()
-portal_service = PortalAccountService()
 roster_import_service = RosterImportService()
+portal_service = PortalAccountService(roster_import_service=roster_import_service)
 portal_liveness_service = LivenessChallengeService()
-app.include_router(build_admin_api_router(camera=camera, started_at=APP_STARTED_AT))
+app.include_router(
+    build_admin_api_router(
+        camera=camera,
+        started_at=APP_STARTED_AT,
+        roster_import_service=roster_import_service,
+    )
+)
 
 
 # 终端识别页演示数据。

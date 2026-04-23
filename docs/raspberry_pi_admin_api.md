@@ -158,6 +158,9 @@ Windows 管理项目应优先按 HTTP 状态码判断是否成功，再读取 JS
 ### 6.2 成员与用户
 
 - `GET /api/admin/roster-members`
+- `POST /api/admin/roster-members/sync`
+- `POST /api/admin/roster-members`
+- `PUT /api/admin/roster-members/{roster_member_id}`
 - `GET /api/admin/users`
 - `GET /api/admin/users/{user_id}`
 - `POST /api/admin/users/{user_id}/status`
@@ -748,7 +751,6 @@ Authorization: Bearer your-admin-token
 - 暂时没有多树莓派聚合能力
 - 暂时没有管理员账号体系，只有 Token 鉴权
 - 暂时没有考勤记录人工修改接口
-- 暂时没有成员名单在线导入接口
 - `face_profile` 和 `attendance` 图片访问仍然依赖管理员请求时附带 Token
 
 ## 11. 推荐下一步
@@ -756,7 +758,7 @@ Authorization: Bearer your-admin-token
 等你 Windows 管理项目第一版能跑起来以后，树莓派这边建议继续加：
 
 - 考勤记录人工补录/修正接口
-- 成员名单导入接口
+- 成员名单批量导入、删除和 Excel 导入接口
 - 人脸档案审核与替换接口
 - 操作日志接口
 - 管理员 Token 轮换机制
@@ -1075,3 +1077,809 @@ Windows 侧如果要正确理解树莓派当前行为，至少要兼容这两类
 - `camera.last_policy_event`
 
 这次改动的本质目的，是让“识别成功”和“最终写库成功”这两个阶段彻底分开，并且都能被管理员端读懂。
+
+## 15. 当前源码对齐版完整接口契约
+
+这一节的目标不是再讲设计思路，而是给 Windows 管理端一个 **可以直接照着实现请求层、数据模型和功能按钮** 的完整契约说明。  
+如果前文某些示例和这里有出入，以这一节和当前源码实现为准。
+
+统一约定：
+
+- 基础前缀：`/api/admin`
+- 所有接口都要求管理员 Token
+- 图片接口返回的是文件流，不是 JSON
+- JSON 接口成功时统一返回 `{"ok": true, ...}`
+- JSON 接口失败时优先看 HTTP 状态码，再看 `detail` 或 `message`
+
+### 15.1 `GET /api/admin/device/info`
+
+用途：
+
+- 读取当前树莓派设备身份信息
+- 读取当前生效的考勤规则摘要
+
+请求参数：
+
+- 无
+
+成功返回：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "device_id": "face3-pi-01",
+    "device_name": "Face3 Raspberry Pi",
+    "device_location": "实验室门口",
+    "app_name": "face3",
+    "hostname": "raspberrypi",
+    "fqdn": "raspberrypi.tailnet-name.ts.net",
+    "web_host": "0.0.0.0",
+    "web_port": 5000,
+    "started_at": "2026-04-23T10:12:00+08:00",
+    "server_time": "2026-04-23T10:30:12+08:00",
+    "attendance_policy": {
+      "rule_mode": "interval_only",
+      "duplicate_block_seconds": 60,
+      "daily_check_in_limit": 1,
+      "policy_feedback_seconds": 4,
+      "attendance_window": {
+        "start_time": "00:00",
+        "end_time": "23:59"
+      },
+      "testing_friendly": true
+    }
+  }
+}
+```
+
+字段说明：
+
+- `device_id`：设备唯一标识，适合在 Windows 端做节点主键
+- `device_name`：设备展示名称
+- `device_location`：安装位置
+- `attendance_policy`：当前树莓派真正正在执行的考勤规则摘要
+
+常见错误：
+
+- `401`：管理员 Token 错误
+- `503`：树莓派未配置管理员 Token
+
+### 15.2 `GET /api/admin/device/health`
+
+用途：
+
+- 读取设备整体健康状态
+- 读取摄像头运行信息
+- 读取最近一次签到结果和最近一次规则判定结果
+
+请求参数：
+
+- 无
+
+成功返回中的关键字段：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "ok": true,
+    "device_id": "face3-pi-01",
+    "device_name": "Face3 Raspberry Pi",
+    "device_location": "实验室门口",
+    "app_name": "face3",
+    "hostname": "raspberrypi",
+    "fqdn": "raspberrypi.tailnet-name.ts.net",
+    "web_host": "0.0.0.0",
+    "web_port": 5000,
+    "started_at": "2026-04-23T10:12:00+08:00",
+    "server_time": "2026-04-23T10:30:12+08:00",
+    "attendance_policy": {
+      "rule_mode": "interval_only",
+      "duplicate_block_seconds": 60,
+      "daily_check_in_limit": 1,
+      "policy_feedback_seconds": 4,
+      "attendance_window": {
+        "start_time": "00:00",
+        "end_time": "23:59"
+      },
+      "testing_friendly": true
+    },
+    "app_uptime_seconds": 1080.5,
+    "database": {
+      "ok": true,
+      "sqlite_path": "data/face3.db"
+    },
+    "camera": {
+      "configured": true,
+      "running": true,
+      "last_frame_at": "2026-04-23T10:30:10+08:00",
+      "last_opened_at": "2026-04-23T10:28:00+08:00",
+      "last_error": null,
+      "detected_faces": 1,
+      "known_faces_count": 3,
+      "last_attendance_message": "签到成功: 张三/S2026001",
+      "last_attendance_record": {
+        "attendance_id": 22,
+        "user_id": 2,
+        "name": "张三",
+        "code": "S2026001",
+        "confidence": 0.91,
+        "snapshot_path": "data/snapshots/20260423/20260423102341-S2026001.jpg"
+      },
+      "last_policy_event": {
+        "code": "attendance_recorded",
+        "label": "已签到",
+        "detail": "张三 S2026001 签到成功",
+        "percent": 100,
+        "allowed": true,
+        "at": "2026-04-23T10:23:41+08:00",
+        "user_id": 2,
+        "name": "张三",
+        "code_text": "S2026001",
+        "attendance_id": 22,
+        "snapshot_path": "data/snapshots/20260423/20260423102341-S2026001.jpg"
+      }
+    },
+    "files": {
+      "roster_exists": true,
+      "faces_dir_exists": true,
+      "snapshots_dir_exists": true
+    },
+    "admin_api": {
+      "token_configured": true,
+      "using_default_token": false
+    }
+  }
+}
+```
+
+字段说明：
+
+- `data.ok`：整机健康状态汇总
+- `database.ok`：数据库连通性
+- `camera.running`：摄像头后台线程是否在运行
+- `camera.last_error`：最近一次摄像头或识别错误
+- `camera.known_faces_count`：已加载到识别器内存中的人脸档案数量
+- `camera.last_attendance_message`：最近一次终端识别状态文案
+- `camera.last_attendance_record`：最近一次真实写库成功的签到摘要
+- `camera.last_policy_event`：最近一次业务规则判断结果，Windows 管理端应把它理解为“最后一步门禁解释”
+
+对 Windows 管理端很重要的一点：
+
+- `last_attendance_record` 表示“真的已经写进数据库”
+- `last_policy_event` 表示“最近一次规则判断结论”
+- 不要只根据终端页上“已匹配”去判断签到是否成功
+
+### 15.3 `GET /api/admin/device/metrics`
+
+用途：
+
+- 读取树莓派运行指标
+- 读取当前考勤规则摘要
+
+请求参数：
+
+- 无
+
+成功返回中的关键字段：
+
+- `system_uptime_seconds`
+- `app_uptime_seconds`
+- `load_average`
+- `memory`
+- `disk`
+- `temperature.cpu_celsius`
+- `process.pid`
+- `attendance_policy`
+
+说明：
+
+- 这个接口更偏设备监控，不直接承担业务列表展示
+- 但它同样会返回 `attendance_policy`，方便 Windows 端在设备详情页统一展示当前规则
+
+### 15.4 `POST /api/admin/device/reload-config`
+
+用途：
+
+- 树莓派重新读取 `env.json`
+- 让修改后的配置热加载生效
+
+请求体：
+
+- 无
+
+成功返回：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "changed": true,
+    "device_id": "face3-pi-01",
+    "device_name": "Face3 Raspberry Pi",
+    "device_location": "实验室门口"
+  }
+}
+```
+
+字段说明：
+
+- `changed = true`：本次检测到配置变化并已重新加载
+- `changed = false`：调用成功，但配置文件没有变化
+
+Windows 端可实现的功能：
+
+- “重新加载树莓派配置”按钮
+
+### 15.5 `GET /api/admin/roster-members`
+
+用途：
+
+- 获取成员名单原始记录
+- 判断某个名单成员是否已经注册
+
+查询参数：
+
+- `search`：可选，按姓名或编号过滤
+- `status`：可选，只支持 `active` 或 `disabled`
+
+成功返回单项字段：
+
+- `id`
+- `name`
+- `code`
+- `role`
+- `status`
+- `created_at`
+- `updated_at`
+- `registered`
+
+字段说明：
+
+- `registered = true`：该成员已经完成正式注册
+- `registered = false`：名单里有这个人，但还没完成首次注册
+
+Windows 端可实现的功能：
+
+- 名单管理页
+- “是否已完成注册”筛选
+
+### 15.6 `GET /api/admin/users`
+
+用途：
+
+- 获取已创建的用户账号列表
+
+查询参数：
+
+- `search`：可选，按姓名或编号过滤
+- `status`：可选，按成员状态过滤
+- `registered_only`：可选，`true` 或 `false`
+
+成功返回单项字段：
+
+- `id`
+- `roster_member_id`
+- `name`
+- `code`
+- `role`
+- `status`
+- `registered`
+- `password_changed_at`
+- `last_login_at`
+- `created_at`
+- `face_profiles_count`
+- `face_profile_ready`
+
+字段说明：
+
+- `registered`：是否已经设置正式登录密码
+- `face_profiles_count`：已上传的人脸档案数量
+- `face_profile_ready`：是否至少具备一份人脸档案
+
+Windows 端可实现的功能：
+
+- 用户列表页
+- 已注册/未注册筛选
+- 已录脸/未录脸筛选
+
+### 15.7 `GET /api/admin/users/{user_id}`
+
+用途：
+
+- 获取单个用户详情
+- 同时附带这个人的人脸档案列表
+
+路径参数：
+
+- `user_id`：必须为有效用户 ID
+
+成功返回：
+
+- 外层仍是 `{"ok": true, "data": {...}}`
+- `data` 包含用户摘要字段
+- `data.face_profiles` 为数组
+
+`face_profiles` 单项字段：
+
+- `id`
+- `user_id`
+- `name`
+- `code`
+- `image_path`
+- `created_at`
+- `image_url`
+
+常见错误：
+
+- `404`：用户不存在
+
+Windows 端可实现的功能：
+
+- 用户详情页
+- 单个用户的人脸档案卡片
+
+### 15.8 `POST /api/admin/users/{user_id}/status`
+
+用途：
+
+- 启用或停用用户
+
+注意：
+
+- 这个接口实际改的是该用户所关联的 `roster_members.status`
+- 不是单独改 `users` 表里的字段
+
+请求体：
+
+```json
+{
+  "status": "disabled"
+}
+```
+
+允许值：
+
+- `active`
+- `disabled`
+
+成功返回：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "updated": true,
+    "user_id": 2,
+    "status": "disabled"
+  }
+}
+```
+
+常见错误：
+
+- `400`：状态值非法
+- `400`：该用户没有绑定成员名单，无法更新
+- `404`：用户不存在
+
+Windows 端可实现的功能：
+
+- 用户启用/停用开关
+
+### 15.9 `POST /api/admin/users/{user_id}/password/reset`
+
+用途：
+
+- 重置某个已注册用户的正式登录密码
+
+请求体：
+
+```json
+{
+  "new_password": "Abcd1234",
+  "confirm_password": "Abcd1234"
+}
+```
+
+密码规则：
+
+- 至少 8 个字符
+- 至少包含 1 个字母和 1 个数字
+- 不能直接包含完整学号/工号
+- 不能与姓名完全相同
+
+成功返回：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "updated": true,
+    "user_id": 2
+  }
+}
+```
+
+常见错误：
+
+- `400`：请求体不是 JSON 对象
+- `400`：密码不符合规则
+- `400`：用户尚未完成首次注册，不能直接重置
+- `404`：用户不存在
+
+Windows 端可实现的功能：
+
+- 管理员重置用户密码
+
+这也是为什么 Windows 端后台必须把这个接口接上。  
+不需要读取明文旧密码，只需要提交新密码即可完成管理员侧重置。
+
+### 15.10 `GET /api/admin/face-profiles`
+
+用途：
+
+- 获取人脸档案列表
+
+查询参数：
+
+- `limit`：默认 100，最大 200
+- `user_id`：可选，按用户 ID 过滤
+- `code`：可选，按编号精确过滤
+
+成功返回单项字段：
+
+- `id`
+- `user_id`
+- `name`
+- `code`
+- `image_path`
+- `created_at`
+- `image_url`
+
+Windows 端可实现的功能：
+
+- 人脸档案列表
+- 指定用户的人脸档案过滤
+
+### 15.11 `GET /api/admin/face-profiles/{face_profile_id}/image`
+
+用途：
+
+- 读取指定人脸档案的原图
+
+返回类型：
+
+- 文件流
+- 不是 JSON
+
+常见错误：
+
+- `404`：人脸档案不存在
+- `404`：对应图片文件不存在
+- `400`：路径非法
+
+Windows 端实现注意事项：
+
+- 如果是服务端去拉图，直接带 Bearer Token 请求即可
+- 如果是前端浏览器直接请求图片 URL，要确认请求头能带上 `Authorization`
+
+### 15.12 `DELETE /api/admin/face-profiles/{face_profile_id}`
+
+用途：
+
+- 删除一条人脸档案
+- 同时尝试删除落盘图片文件
+
+成功返回：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "deleted": true,
+    "face_profile_id": 2
+  }
+}
+```
+
+常见错误：
+
+- `404`：人脸档案不存在
+
+Windows 端可实现的功能：
+
+- 删除错误档案
+- 删除重复档案
+- 让用户重新上传更清晰的人脸资料
+
+### 15.13 `GET /api/admin/attendance`
+
+用途：
+
+- 获取考勤记录列表
+
+查询参数：
+
+- `limit`：默认 50，最大 300
+- `date`：可选，格式 `YYYY-MM-DD`
+- `code`：可选，按编号精确过滤
+- `name`：可选，按姓名模糊过滤
+
+成功返回单项字段：
+
+- `id`
+- `user_id`
+- `name`
+- `code`
+- `check_type`
+- `check_time`
+- `snapshot_path`
+- `snapshot_url`
+- `confidence`
+
+字段说明：
+
+- `check_type`：当前代码里主要是 `check_in`
+- `snapshot_url`：如果存在快照，则返回对应图片接口路径
+- `check_time`：树莓派本地时区时间字符串
+
+Windows 端可实现的功能：
+
+- 考勤流水表
+- 按日期、姓名、工号筛选
+- 点击查看对应快照
+
+### 15.14 `GET /api/admin/attendance/today-summary`
+
+用途：
+
+- 读取某一天的考勤汇总
+
+查询参数：
+
+- `date`：可选，格式 `YYYY-MM-DD`
+
+不传 `date` 时：
+
+- 默认返回树莓派当前本地日期对应的汇总
+
+成功返回字段：
+
+- `date`
+- `registered_users`
+- `checked_in_users`
+- `attendance_records`
+- `absent_users`
+
+字段说明：
+
+- `registered_users`：当前用户总数
+- `checked_in_users`：指定日期内至少签到过一次的不同用户数
+- `attendance_records`：指定日期内总签到流水数
+- `absent_users`：`registered_users - checked_in_users`
+
+Windows 端可实现的功能：
+
+- 仪表盘顶部汇总卡
+- 指定日期的统计切换
+
+### 15.15 `GET /api/admin/attendance/{attendance_id}/snapshot`
+
+用途：
+
+- 读取某条考勤记录对应的抓拍图
+
+返回类型：
+
+- 文件流
+
+常见错误：
+
+- `404`：考勤记录不存在
+- `404`：该记录没有快照
+- `404`：快照文件不存在
+- `400`：路径非法
+
+Windows 端可实现的功能：
+
+- 考勤记录详情预览
+- 快照查看与下载
+
+### 15.16 Windows 管理端必须至少覆盖哪些功能
+
+如果 Windows 管理端要覆盖树莓派目前已经暴露的全部能力，至少应该把下面这些功能接起来：
+
+- 设备信息查看
+  - `GET /api/admin/device/info`
+  - `GET /api/admin/device/health`
+  - `GET /api/admin/device/metrics`
+- 配置热重载
+  - `POST /api/admin/device/reload-config`
+- 成员与用户查看
+  - `GET /api/admin/roster-members`
+  - `POST /api/admin/roster-members/sync`
+  - `POST /api/admin/roster-members`
+  - `PUT /api/admin/roster-members/{roster_member_id}`
+  - `GET /api/admin/users`
+  - `GET /api/admin/users/{user_id}`
+- 用户状态管理
+  - `POST /api/admin/users/{user_id}/status`
+- 用户密码重置
+  - `POST /api/admin/users/{user_id}/password/reset`
+- 人脸档案查看与删除
+  - `GET /api/admin/face-profiles`
+  - `GET /api/admin/face-profiles/{face_profile_id}/image`
+  - `DELETE /api/admin/face-profiles/{face_profile_id}`
+- 考勤记录与快照查看
+  - `GET /api/admin/attendance`
+  - `GET /api/admin/attendance/today-summary`
+  - `GET /api/admin/attendance/{attendance_id}/snapshot`
+
+### 15.17 这份文档对 Windows 端的最终要求
+
+Windows 端如果要“完成树莓派当前提供的所有功能”，最低要求是：
+
+- 路由层把以上所有接口都接入
+- 数据模型兼容新增字段，尤其是：
+  - `attendance_policy`
+  - `camera.last_policy_event`
+- 对文件流接口和 JSON 接口做分开处理
+- 把名单同步、名单新增、名单编辑、密码重置、用户状态更新、人脸删除这类写操作真正接到按钮事件，而不是只展示只读页面
+
+这一节写完之后，Windows 端不需要再去猜接口能力边界。  
+只要按这里逐项接入，就能覆盖树莓派目前已经提供的全部管理员功能。
+
+### 15.18 2026-04-23 名单热同步与在线维护新增说明
+
+这次新增的目标很明确：
+
+- 解决 `data/member_roster.csv` 更新后，Windows 管理端查 `GET /api/admin/roster-members` 仍然看不到新成员的问题
+- 允许 Windows 管理端直接通过设备侧管理员 API 新增和修改成员名单
+- 确保名单写操作同时落到 SQLite 和 CSV，避免两边数据各自漂移
+
+本次新增行为：
+
+- 服务启动后，名单仍会先做一次初始化同步
+- 运行期间如果检测到 `data/member_roster.csv` 文件发生变化，`/api/admin/roster-members`、`/api/admin/users`、`/api/admin/users/{user_id}`、注册与登录流程都会先尝试按文件变更自动热同步
+- `POST /api/admin/users/{user_id}/status` 现在不再只改数据库，也会把对应名单状态同步回 CSV，避免后续文件热同步把状态又冲回旧值
+
+本次新增接口如下：
+
+#### 15.18.1 强制同步名单文件
+
+`POST /api/admin/roster-members/sync`
+
+用途：
+
+- 让 Windows 管理端主动触发一次 CSV -> SQLite 的强制同步
+- 适合你明确知道树莓派本地 CSV 已经被修改，希望立刻刷新后台数据时调用
+
+请求体：
+
+- 无
+
+成功返回示例：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "synced": true,
+    "roster_path": "data/member_roster.csv",
+    "total_rows": 12,
+    "created_count": 2,
+    "updated_count": 10
+  }
+}
+```
+
+#### 15.18.2 新增成员名单
+
+`POST /api/admin/roster-members`
+
+请求体：
+
+```json
+{
+  "name": "张三",
+  "code": "S2026001",
+  "role": "member",
+  "status": "active",
+  "initial_password": "Init123456"
+}
+```
+
+字段说明：
+
+- `name`：姓名，必填
+- `code`：学号或工号，必填，系统会自动去空白并转大写
+- `role`：角色，空值会回退为 `member`
+- `status`：只允许 `active` 或 `disabled`
+- `initial_password`：初始密码，必填，至少 6 位
+
+成功返回示例：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "action": "created",
+    "member": {
+      "id": 8,
+      "name": "张三",
+      "code": "S2026001",
+      "role": "member",
+      "status": "active",
+      "created_at": "2026-04-23 16:20:10",
+      "updated_at": "2026-04-23 16:20:10",
+      "registered": false
+    }
+  }
+}
+```
+
+写入规则：
+
+- 同时写入 `data/member_roster.csv`
+- 同时写入 `roster_members`
+- 如果编号已存在，会返回 `400`
+
+#### 15.18.3 修改成员名单
+
+`PUT /api/admin/roster-members/{roster_member_id}`
+
+请求体：
+
+```json
+{
+  "name": "张三",
+  "code": "S2026001",
+  "role": "teacher",
+  "status": "disabled",
+  "initial_password": "Init123456"
+}
+```
+
+说明：
+
+- `initial_password` 可选
+- 如果该成员当前在 CSV 里还能找到原始行，不传 `initial_password` 时会自动沿用原来的初始密码
+- 如果该成员当前在 CSV 里没有对应行，而你又要修复并写回 CSV，则需要显式补传 `initial_password`
+
+当前限制：
+
+- 暂不支持直接修改 `code`
+- 如果确实录错编号，建议新建正确成员后，再人工处理旧编号数据
+
+成功返回示例：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "action": "updated",
+    "member": {
+      "id": 8,
+      "name": "张三",
+      "code": "S2026001",
+      "role": "teacher",
+      "status": "disabled",
+      "created_at": "2026-04-23 16:20:10",
+      "updated_at": "2026-04-23 16:31:45",
+      "registered": false
+    }
+  }
+}
+```
+
+#### 15.18.4 Windows 管理端建议接法
+
+如果 Windows 管理端要把“成员名单管理”这块补齐，建议至少接下面 4 个动作：
+
+- 首屏查询：`GET /api/admin/roster-members`
+- 手工强制刷新：`POST /api/admin/roster-members/sync`
+- 新增成员：`POST /api/admin/roster-members`
+- 编辑成员：`PUT /api/admin/roster-members/{roster_member_id}`
+
+这样即使管理员还在手工编辑树莓派本地 CSV，Windows 端也能通过查询或强制同步看到最新结果；如果后面改成完全走 API 维护名单，也不需要再重启树莓派服务。

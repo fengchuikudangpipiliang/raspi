@@ -14,6 +14,7 @@ from scripts.web.account_security import normalize_code
 from scripts.web.account_security import normalize_name
 from scripts.web.account_security import validate_new_password
 from scripts.web.account_security import verify_secret
+from scripts.web.roster_import_service import RosterImportService
 from scripts.web.registration_validation import RegistrationValidationPipeline
 from scripts.web.registration_validation import extract_face_encoding
 from scripts.web.registration_validation import results_to_dicts
@@ -29,9 +30,10 @@ class PortalAccountService:
     负责首次注册、登录校验、登录态读取和人脸上传入库。
     """
 
-    def __init__(self, repo=None, validation_pipeline=None):
+    def __init__(self, repo=None, validation_pipeline=None, roster_import_service=None):
         self.repo = repo or AttendanceRepository()
         self.validation_pipeline = validation_pipeline or RegistrationValidationPipeline()
+        self.roster_import_service = roster_import_service or RosterImportService(repo=self.repo)
         self.faces_dir = Path(cfg.faces_dir)
         self.faces_dir.mkdir(parents=True, exist_ok=True)
         self.max_face_profiles = max(int(cfg.portal_max_face_profiles), 1)
@@ -57,6 +59,7 @@ class PortalAccountService:
         if not initial_password:
             raise ValueError("请填写管理员预置的初始密码。")
 
+        self.roster_import_service.sync_from_file_if_changed()
         roster_member = self.repo.get_roster_member_by_code(normalized_code)
         if not roster_member:
             raise ValueError("该学号或工号不在允许注册名单中，请联系管理员。")
@@ -97,6 +100,7 @@ class PortalAccountService:
         if not password:
             raise ValueError("请输入密码。")
 
+        self.roster_import_service.sync_from_file_if_changed()
         user = self.repo.get_user_by_code(normalized_code)
         if not user or not user.get("password_hash"):
             roster_member = self.repo.get_roster_member_by_code(normalized_code)

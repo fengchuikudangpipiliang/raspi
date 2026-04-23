@@ -354,6 +354,30 @@ class AttendanceRepository:
             ).fetchone()
             return dict(row) if row else None
 
+    def get_roster_member_by_id(self, roster_member_id: int) -> Optional[dict]:
+        """
+        按成员名单主键读取一条记录。
+        管理员 API 更新名单时用它先确认目标是否存在，避免直接盲写 CSV。
+        """
+        with self.db.session() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    id,
+                    name,
+                    code,
+                    role,
+                    status,
+                    initial_password_hash,
+                    created_at,
+                    updated_at
+                FROM roster_members
+                WHERE id = ?
+                """,
+                (roster_member_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
     def list_roster_members(self):
         with self.db.session() as connection:
             rows = connection.execute(

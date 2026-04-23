@@ -13,9 +13,10 @@ from scripts.device_status_service import DeviceStatusService
 from scripts.web.account_security import hash_secret
 from scripts.web.account_security import normalize_name
 from scripts.web.account_security import validate_new_password
+from scripts.web.roster_import_service import RosterImportService
 
 
-def build_admin_api_router(camera, started_at) -> APIRouter:
+def build_admin_api_router(camera, started_at, roster_import_service=None) -> APIRouter:
     """
     构建设备侧管理员 API 路由。
     这些接口给 Windows 管理项目通过 Tailscale 直接调用，不依赖浏览器 Session。
@@ -23,6 +24,7 @@ def build_admin_api_router(camera, started_at) -> APIRouter:
 
     router = APIRouter(prefix="/api/admin", tags=["admin-api"])
     repo = AttendanceRepository()
+    roster_import_service = roster_import_service or RosterImportService(repo=repo)
     device_status_service = DeviceStatusService(camera=camera, repo=repo, started_at=started_at)
     project_root = Path(__file__).resolve().parents[1]
 
@@ -74,6 +76,30 @@ def build_admin_api_router(camera, started_at) -> APIRouter:
             "face_profiles_count": int(user.get("face_profiles_count") or 0),
             "face_profile_ready": int(user.get("face_profiles_count") or 0) > 0,
         }
+
+    def build_registered_codes() -> set[str]:
+        return {
+            user["code"]
+            for user in repo.list_users_with_face_stats(registered_only=True)
+        }
+
+    def serialize_roster_member(member: dict, registered_codes: set[str]) -> dict:
+        return {
+            **member,
+            "registered": member["code"] in registered_codes,
+        }
+
+    async def decode_roster_member_payload(request: Request) -> dict:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="提交数据格式错误。")
+        return payload
+
+    def ensure_roster_synced() -> None:
+        try:
+            roster_import_service.sync_from_file_if_changed()
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
 
     def serialize_face_profile(face_profile: dict) -> dict:
         return {
@@ -128,13 +154,29 @@ def build_admin_api_router(camera, started_at) -> APIRouter:
             },
         }
 
+    @router.post("/roster-members/sync")
+    def sync_roster_members(request: Request):
+        require_admin_token(request)
+        try:
+            result = roster_import_service.sync_from_file()
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return {
+            "ok": True,
+            "data": {
+                "synced": True,
+                "roster_path": str(roster_import_service.roster_path),
+                "total_rows": result.total_rows,
+                "created_count": result.created_count,
+                "updated_count": result.updated_count,
+            },
+        }
+
     @router.get("/roster-members")
     def get_roster_members(request: Request, search: str = "", status: str = ""):
         require_admin_token(request)
-        registered_codes = {
-            user["code"]
-            for user in repo.list_users_with_face_stats(registered_only=True)
-        }
+        ensure_roster_synced()
+        registered_codes = build_registered_codes()
         status = (status or "").strip().lower()
         search = (search or "").strip()
         items = []
@@ -143,23 +185,71 @@ def build_admin_api_router(camera, started_at) -> APIRouter:
                 continue
             if status and member["status"] != status:
                 continue
-            items.append(
-                {
-                    **member,
-                    "registered": member["code"] in registered_codes,
-                }
-            )
+            items.append(serialize_roster_member(member, registered_codes))
         return {"ok": True, "items": items, "total": len(items)}
+
+    @router.post("/roster-members")
+    async def create_roster_member(request: Request):
+        require_admin_token(request)
+        payload = await decode_roster_member_payload(request)
+        try:
+            result = roster_import_service.create_member(
+                name=payload.get("name", ""),
+                code=payload.get("code", ""),
+                role=payload.get("role", ""),
+                status=payload.get("status", ""),
+                initial_password=payload.get("initial_password", ""),
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+        registered_codes = build_registered_codes()
+        return {
+            "ok": True,
+            "data": {
+                "action": result["action"],
+                "member": serialize_roster_member(result["member"], registered_codes),
+            },
+        }
+
+    @router.put("/roster-members/{roster_member_id}")
+    async def update_roster_member(request: Request, roster_member_id: int):
+        require_admin_token(request)
+        payload = await decode_roster_member_payload(request)
+        try:
+            result = roster_import_service.update_member(
+                roster_member_id,
+                name=payload.get("name", ""),
+                role=payload.get("role", ""),
+                status=payload.get("status", ""),
+                initial_password=payload.get("initial_password", ""),
+                code=payload.get("code", ""),
+            )
+        except ValueError as error:
+            message = str(error)
+            status_code = 404 if message == "成员名单不存在。" else 400
+            raise HTTPException(status_code=status_code, detail=message) from error
+
+        registered_codes = build_registered_codes()
+        return {
+            "ok": True,
+            "data": {
+                "action": result["action"],
+                "member": serialize_roster_member(result["member"], registered_codes),
+            },
+        }
 
     @router.get("/users")
     def get_users(request: Request, search: str = "", status: str = "", registered_only: bool = False):
         require_admin_token(request)
+        ensure_roster_synced()
         items = [serialize_user_summary(item) for item in repo.list_users_with_face_stats(search=search, status=status, registered_only=registered_only)]
         return {"ok": True, "items": items, "total": len(items)}
 
     @router.get("/users/{user_id}")
     def get_user_detail(request: Request, user_id: int):
         require_admin_token(request)
+        ensure_roster_synced()
         user = repo.get_user_detail(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="用户不存在。")
@@ -175,6 +265,7 @@ def build_admin_api_router(camera, started_at) -> APIRouter:
     @router.post("/users/{user_id}/status")
     async def update_user_status(request: Request, user_id: int):
         require_admin_token(request)
+        ensure_roster_synced()
         payload = await request.json()
         status = (payload.get("status", "") or "").strip().lower() if isinstance(payload, dict) else ""
         if status not in {"active", "disabled"}:
@@ -185,12 +276,24 @@ def build_admin_api_router(camera, started_at) -> APIRouter:
             raise HTTPException(status_code=404, detail="用户不存在。")
         if not user.get("roster_member_id"):
             raise HTTPException(status_code=400, detail="该用户没有绑定成员名单，无法更新状态。")
-
-        changed = repo.update_user_roster_status(user_id, status)
+        roster_member = repo.get_roster_member_by_id(user["roster_member_id"])
+        if not roster_member:
+            raise HTTPException(status_code=404, detail="用户关联的成员名单不存在。")
+        try:
+            result = roster_import_service.update_member(
+                roster_member["id"],
+                name=roster_member["name"],
+                role=roster_member["role"],
+                status=status,
+            )
+        except ValueError as error:
+            message = str(error)
+            status_code = 404 if message == "成员名单不存在。" else 400
+            raise HTTPException(status_code=status_code, detail=message) from error
         return {
             "ok": True,
             "data": {
-                "updated": changed,
+                "updated": result["action"] in {"created", "updated"},
                 "user_id": user_id,
                 "status": status,
             },
@@ -199,6 +302,7 @@ def build_admin_api_router(camera, started_at) -> APIRouter:
     @router.post("/users/{user_id}/password/reset")
     async def reset_user_password(request: Request, user_id: int):
         require_admin_token(request)
+        ensure_roster_synced()
         payload = await request.json()
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="提交数据格式错误。")

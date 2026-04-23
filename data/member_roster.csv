@@ -2,3 +2,4 @@ name,code,role,initial_password,status
 张三,S2026001,student,Face3@2026,active
 李老师,T2026001,teacher,LabFace@2026,active
 王同学,S2026002,student,ClassFace@2026,disabled
+李四,S2026,牛逼之人,88888888a,active

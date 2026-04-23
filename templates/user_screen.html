@@ -125,6 +125,9 @@
     const terminalStatusUrl = new URL("/api/terminal/status", window.location.href).toString();
     const videoFeedUrl = new URL(videoFeedPath, window.location.href).toString();
     const healthzUrl = new URL(healthzPath, window.location.href).toString();
+    const backendCheckIntervalMs = 10_000;
+    const terminalStatusIntervalMs = 10_000;
+    const backendCheckTimeoutMs = 5_000;
 
     let backendOnline = true;
     let streamAvailable = true;
@@ -179,7 +182,7 @@
 
     async function checkBackend() {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        const timeoutId = setTimeout(() => controller.abort(), backendCheckTimeoutMs);
 
         try {
             const response = await fetch(`${healthzUrl}?t=${Date.now()}`, {
@@ -240,7 +243,7 @@
     refreshVideoStream();
     checkBackend();
     refreshTerminalStatus();
-    window.setInterval(checkBackend, 3000);
-    window.setInterval(refreshTerminalStatus, 1200);
+    window.setInterval(checkBackend, backendCheckIntervalMs);
+    window.setInterval(refreshTerminalStatus, terminalStatusIntervalMs);
 </script>
 {% endblock %}

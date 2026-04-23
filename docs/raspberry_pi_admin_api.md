@@ -884,3 +884,194 @@ Authorization: Bearer your-admin-token
 - 只是给 `/api/admin/device/health` 增加了几个可选字段
 - 树莓派本地终端现在会自动写入真实考勤记录和快照
 - 所以 Windows 侧只需要兼容新增字段，不需要重写原有请求层
+
+## 14. 2026-04-22 增量变更记录
+
+这一节只描述 **本次和考勤规则有关的增量变化**，方便 Windows 侧 AI 直接理解，不用反复翻前文。
+
+### 14.1 为什么这次要改
+
+本次改动的核心原因不是“为了做一个更复杂的考勤系统”，而是为了解决两个现实问题：
+
+- 树莓派终端在识别成功后，之前会直接写考勤记录，容易在测试时连续生成多条重复签到
+- Windows 管理端虽然能看到结果，但以前很难知道“这条记录为什么被写入”或者“为什么这次识别明明成功了却没有写入”
+
+所以这一版新增了一个 **轻量、可配置、可解释** 的考勤规则层，放在“识别成功”和“真正写数据库”之间。
+
+它的设计意图是：
+
+- 让树莓派端在识别成功后，先按业务规则做最后一层门禁
+- 让测试阶段可以使用更宽松的规则，方便反复演示
+- 让后期切回正式规则时，不需要重写主流程，只要改配置
+- 让 Windows 管理端能读到“当前设备到底按什么规则在运行”和“最近一次为什么放行/拦截”
+
+### 14.2 这次没有改什么
+
+本次 **没有** 修改这些内容：
+
+- 管理员 API 路由地址
+- Bearer Token 鉴权方式
+- 考勤记录列表接口地址
+- 快照读取接口地址
+
+也就是说，Windows 端原来的请求 URL 可以继续使用。
+
+### 14.3 当前树莓派实际生效的考勤规则
+
+本次已经把考勤规则做成配置项。
+
+当前树莓派 `env.json` 默认配置为：
+
+- `attendance_rule_mode = interval_only`
+- `attendance_duplicate_block_seconds = 60`
+- `attendance_daily_check_in_limit = 1`
+- `attendance_policy_feedback_seconds = 4`
+
+当前这套配置的真实含义是：
+
+- 现在处于 **测试友好模式**
+- 同一用户识别成功后，`60` 秒内再次识别成功，不会重复写入签到
+- 超过 `60` 秒后，可以再次写入，方便你反复测试
+- 虽然配置里仍保留“每天最多签到 1 次”的参数，但在 `interval_only` 模式下，当前主要执行的是“固定时间间隔拦截”
+
+后期如果要切回更接近正式使用的规则，只需要把：
+
+- `attendance_rule_mode`
+
+改成：
+
+- `daily_once`
+
+就会切换为“每天最多签到 N 次”的规则，不需要改代码主流程。
+
+### 14.4 本次管理员 API 新增的可见字段
+
+这次没有新增路由，但有两类返回内容变得更丰富了。
+
+#### 一类：设备级考勤规则摘要
+
+下面两个接口返回的 `data` 里，现在会包含：
+
+- `attendance_policy`
+
+涉及接口：
+
+- `GET /api/admin/device/info`
+- `GET /api/admin/device/metrics`
+- `GET /api/admin/device/health`
+
+新增字段示例：
+
+```json
+{
+  "attendance_policy": {
+    "rule_mode": "interval_only",
+    "duplicate_block_seconds": 60,
+    "daily_check_in_limit": 1,
+    "policy_feedback_seconds": 4,
+    "attendance_window": {
+      "start_time": "00:00",
+      "end_time": "23:59"
+    },
+    "testing_friendly": true
+  }
+}
+```
+
+字段解释：
+
+- `rule_mode`：当前规则模式。`interval_only` 表示测试友好的“间隔限制模式”，`daily_once` 表示更正式的“每天限制模式”
+- `duplicate_block_seconds`：同一用户两次成功签到之间，至少要间隔多少秒
+- `daily_check_in_limit`：在 `daily_once` 模式下，每天允许的最大签到次数
+- `policy_feedback_seconds`：一次规则判定结果在终端状态区保留多少秒，方便现场观察
+- `attendance_window`：当前设备允许签到的基础时间窗
+- `testing_friendly`：是否处于更适合现场反复演示的测试规则模式
+
+这组字段的意义不是为了“做 UI 花活”，而是为了让 Windows 端能够解释设备行为。  
+以后如果管理员看到某台树莓派明明识别到人却没有继续写库，先看 `attendance_policy`，就能知道这是不是设备当前规则本来就不允许。
+
+#### 二类：最近一次规则判定结果
+
+`GET /api/admin/device/health` 的 `data.camera` 下，现在新增：
+
+- `last_policy_event`
+
+示例：
+
+```json
+{
+  "camera": {
+    "last_policy_event": {
+      "code": "attendance_duplicate_interval_blocked",
+      "label": "重复签到",
+      "detail": "当前规则限制 60 秒内只允许签到一次，还需等待 41 秒。",
+      "percent": 100,
+      "allowed": false,
+      "at": "2026-04-22T20:40:18+08:00",
+      "user_id": 2,
+      "name": "张三",
+      "code_text": "S2026001"
+    }
+  }
+}
+```
+
+这个对象的意义是：
+
+- 告诉管理员端“最近一次业务规则判断，到底是放行了还是拦截了”
+- 不是识别引擎层面的模糊/侧脸/多人入镜原因
+- 而是更靠近业务写库层的最终结论
+
+常见 `code` 含义：
+
+- `attendance_recorded`：已经真正写入签到记录
+- `attendance_duplicate_interval_blocked`：被“短时间重复签到限制”拦截
+- `attendance_daily_limit_reached`：被“每天最大签到次数限制”拦截
+- `attendance_allowed`：规则校验通过，允许写入
+
+### 14.5 Windows 侧 AI 需要特别注意什么
+
+Windows 侧不要再把“识别成功”直接等同于“已经写入考勤”。
+
+更准确的理解应该是：
+
+1. 先有人脸识别成功
+2. 再经过树莓派本地考勤规则判断
+3. 最后才真正写入 `attendance_records`
+
+这意味着：
+
+- 如果只看终端视频上“已匹配”，不能保证数据库里一定新增了记录
+- 更可靠的判断应该结合：
+  - `camera.last_policy_event`
+  - `camera.last_attendance_record`
+  - `/api/admin/attendance` 最新一条记录
+
+### 14.6 这次改动的创新点到底是什么
+
+这次不是简单加一个“冷却时间”变量，而是把原来容易混在一起的两层逻辑拆开了：
+
+- 第一层：识别层
+  - 负责判断是不是这个人
+  - 负责判断当前画面是否满足识别条件
+
+- 第二层：考勤规则层
+  - 负责判断“即使已经识别成功，这次要不要真的写入数据库”
+
+这样拆开的价值在于：
+
+- 终端识别逻辑和业务规则逻辑不会继续纠缠在一起
+- 测试模式和正式模式都能复用同一条写库链路
+- Windows 端以后做日志、解释、排查时会更清楚
+- 后续如果改成“每天一次签到”“每天一次签到加一次签退”，不需要推翻现有结构
+
+### 14.7 给 Windows 侧 AI 的最终一句话总结
+
+本次管理员 API **没有改路由**，但树莓派设备状态相关接口现在多了一层“考勤规则可解释信息”。
+
+Windows 侧如果要正确理解树莓派当前行为，至少要兼容这两类新增字段：
+
+- `attendance_policy`
+- `camera.last_policy_event`
+
+这次改动的本质目的，是让“识别成功”和“最终写库成功”这两个阶段彻底分开，并且都能被管理员端读懂。

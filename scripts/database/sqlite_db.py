@@ -653,6 +653,51 @@ class AttendanceRepository:
             )
             return cursor.lastrowid
 
+    def count_attendance_records_for_user_on_date(self, user_id: int, date_text: str, check_type: str = "check_in") -> int:
+        """
+        统计某个用户在指定日期已经写入的考勤记录数。
+        当前用于“每天最多签到 N 次”的业务门禁。
+        """
+
+        with self.db.session() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM attendance_records
+                WHERE
+                    user_id = ?
+                    AND check_type = ?
+                    AND date(check_time) = ?
+                """,
+                (user_id, check_type, date_text),
+            ).fetchone()
+            return int(row["total"])
+
+    def get_latest_attendance_record_for_user(self, user_id: int, check_type: str = "check_in") -> Optional[dict]:
+        """
+        读取某个用户最近一条考勤记录。
+        当前用于“短时间重复签到拦截”。
+        """
+
+        with self.db.session() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    id,
+                    user_id,
+                    check_type,
+                    check_time,
+                    snapshot_path,
+                    confidence
+                FROM attendance_records
+                WHERE user_id = ? AND check_type = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (user_id, check_type),
+            ).fetchone()
+            return dict(row) if row else None
+
     def list_attendance_records(self, limit=50, date: str = "", code: str = "", name: str = ""):
         date = (date or "").strip()
         code = (code or "").strip()

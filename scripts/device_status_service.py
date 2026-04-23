@@ -31,6 +31,7 @@ class DeviceStatusService:
             "web_port": cfg.web_port,
             "started_at": self._iso_from_timestamp(self.started_at),
             "server_time": self._iso_now(),
+            "attendance_policy": self._build_attendance_policy(),
         }
 
     def build_health(self) -> dict:
@@ -52,6 +53,7 @@ class DeviceStatusService:
                 "known_faces_count": 0 if getattr(self.camera, "recognizer", None) is None else self.camera.recognizer.known_faces_count(),
                 "last_attendance_message": getattr(self.camera, "last_attendance_message", None),
                 "last_attendance_record": getattr(self.camera, "last_attendance_record", None),
+                "last_policy_event": getattr(self.camera, "last_policy_event", None),
             },
             "files": {
                 "roster_exists": Path(cfg.member_roster_path).exists(),
@@ -83,6 +85,7 @@ class DeviceStatusService:
             "process": {
                 "pid": os.getpid(),
             },
+            "attendance_policy": self._build_attendance_policy(),
         }
 
     def _check_database(self) -> bool:
@@ -182,3 +185,20 @@ class DeviceStatusService:
         if value is None:
             return None
         return datetime.fromtimestamp(value).astimezone().isoformat(timespec="seconds")
+
+    def _build_attendance_policy(self) -> dict:
+        """
+        汇总当前生效的考勤规则配置，方便管理员端解释写库或拦截原因。
+        """
+
+        return {
+            "rule_mode": str(cfg.attendance_rule_mode or "daily_once").strip().lower(),
+            "duplicate_block_seconds": max(int(cfg.attendance_duplicate_block_seconds or 0), 0),
+            "daily_check_in_limit": max(int(cfg.attendance_daily_check_in_limit or 1), 1),
+            "policy_feedback_seconds": max(int(cfg.attendance_policy_feedback_seconds or 0), 0),
+            "attendance_window": {
+                "start_time": cfg.attendance_start_time,
+                "end_time": cfg.attendance_end_time,
+            },
+            "testing_friendly": str(cfg.attendance_rule_mode or "").strip().lower() == "interval_only",
+        }

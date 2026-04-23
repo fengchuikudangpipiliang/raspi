@@ -1,5 +1,6 @@
 import threading
 import time
+from math import ceil
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -58,6 +59,8 @@ class VideoCamera:
         self.last_attendance_message = "等待识别"
         self.success_overlay_until = 0.0
         self.success_overlay_text = ""
+        self.policy_feedback_until = 0.0
+        self.last_policy_event = None
 
         self.latest_recognition_frame: Optional[np.ndarray] = None
         self.latest_recognition_frame_id = 0
@@ -331,6 +334,19 @@ class VideoCamera:
         if self.recognizer is None or result.user_id is None:
             return
 
+        decision = self._evaluate_attendance_policy(result)
+        if not decision["allowed"]:
+            self.last_attendance_message = decision["message"]
+            self._set_policy_feedback(
+                code=decision["code"],
+                label=decision["label"],
+                detail=decision["message"],
+                percent=decision["percent"],
+                allowed=False,
+                result=result,
+            )
+            return
+
         try:
             snapshot_path = self._save_snapshot(frame, result)
             attendance_id = self.repo.create_attendance_record(
@@ -351,6 +367,18 @@ class VideoCamera:
             self.last_attendance_message = f"签到成功: {result.name}/{result.code}"
             self.success_overlay_text = f"{result.name} {result.code} 签到成功"
             self.success_overlay_until = time.time() + 4.0
+            self._set_policy_feedback(
+                code="attendance_recorded",
+                label="已签到",
+                detail=self.success_overlay_text,
+                percent=100,
+                allowed=True,
+                result=result,
+                extra={
+                    "attendance_id": attendance_id,
+                    "snapshot_path": snapshot_path,
+                },
+            )
             self.last_error = None
         except Exception as error:
             self.last_error = f"attendance_write_failed: {error}"
@@ -507,6 +535,12 @@ class VideoCamera:
                 "detail": self.success_overlay_text,
                 "percent": 100,
             }
+        if now <= self.policy_feedback_until and self.last_policy_event:
+            return {
+                "label": self.last_policy_event["label"],
+                "detail": self.last_policy_event["detail"],
+                "percent": self.last_policy_event["percent"],
+            }
 
         if self.capture is None or not self.capture.isOpened():
             return {
@@ -589,3 +623,110 @@ class VideoCamera:
             "detail": "正在进行人脸比对",
             "percent": 60,
         }
+
+    def _evaluate_attendance_policy(self, result: RecognitionResult) -> dict:
+        """
+        在真正写考勤前做业务规则判断。
+        当前支持测试用的“固定时间间隔内只允许写一次”，也支持后续切回“每天一次签到”。
+        """
+
+        if result.user_id is None:
+            return {
+                "allowed": False,
+                "code": "attendance_missing_user",
+                "label": "签到失败",
+                "message": "当前识别结果缺少用户信息。",
+                "percent": 0,
+            }
+
+        mode = str(cfg.attendance_rule_mode or "daily_once").strip().lower()
+        duplicate_block_seconds = max(int(cfg.attendance_duplicate_block_seconds or 0), 0)
+        daily_limit = max(int(cfg.attendance_daily_check_in_limit or 1), 1)
+        check_type = "check_in"
+        date_text = datetime.fromtimestamp(result.timestamp).astimezone().date().isoformat()
+
+        latest_record = self.repo.get_latest_attendance_record_for_user(result.user_id, check_type=check_type)
+        if latest_record and duplicate_block_seconds > 0:
+            elapsed_seconds = self._seconds_since_attendance(latest_record["check_time"], result.timestamp)
+            if elapsed_seconds is not None and elapsed_seconds < duplicate_block_seconds:
+                remaining_seconds = max(duplicate_block_seconds - elapsed_seconds, 0.0)
+                return {
+                    "allowed": False,
+                    "code": "attendance_duplicate_interval_blocked",
+                    "label": "重复签到",
+                    "message": f"当前规则限制 {duplicate_block_seconds} 秒内只允许签到一次，还需等待 {ceil(remaining_seconds)} 秒。",
+                    "percent": 100,
+                }
+
+        if mode == "daily_once":
+            today_count = self.repo.count_attendance_records_for_user_on_date(
+                result.user_id,
+                date_text,
+                check_type=check_type,
+            )
+            if today_count >= daily_limit:
+                return {
+                    "allowed": False,
+                    "code": "attendance_daily_limit_reached",
+                    "label": "今日已签到",
+                    "message": f"当前规则限制每天最多签到 {daily_limit} 次，今天已经完成签到。",
+                    "percent": 100,
+                }
+
+        return {
+            "allowed": True,
+            "code": "attendance_allowed",
+            "label": "准备签到",
+            "message": "规则校验通过，允许写入考勤。",
+            "percent": 95,
+        }
+
+    def _seconds_since_attendance(self, check_time_text: str, now_timestamp: float) -> Optional[float]:
+        """
+        计算最近一条考勤记录距离当前识别时刻经过了多少秒。
+        """
+
+        if not check_time_text:
+            return None
+        try:
+            check_time = datetime.strptime(check_time_text, "%Y-%m-%d %H:%M:%S").astimezone()
+        except ValueError:
+            return None
+        now_dt = datetime.fromtimestamp(now_timestamp).astimezone()
+        return max((now_dt - check_time).total_seconds(), 0.0)
+
+    def _set_policy_feedback(
+        self,
+        *,
+        code: str,
+        label: str,
+        detail: str,
+        percent: int,
+        allowed: bool,
+        result: Optional[RecognitionResult] = None,
+        extra: Optional[dict] = None,
+    ) -> None:
+        """
+        缓存最近一次业务规则判定结果，供终端页和管理员 API 读取。
+        """
+
+        self.policy_feedback_until = time.time() + max(float(cfg.attendance_policy_feedback_seconds or 0), 0.0)
+        payload = {
+            "code": code,
+            "label": label,
+            "detail": detail,
+            "percent": int(percent),
+            "allowed": bool(allowed),
+            "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        }
+        if result is not None:
+            payload.update(
+                {
+                    "user_id": result.user_id,
+                    "name": result.name,
+                    "code_text": result.code,
+                }
+            )
+        if extra:
+            payload.update(extra)
+        self.last_policy_event = payload

@@ -1451,6 +1451,9 @@ source .venv/bin/activate
 - 只有正式注册且状态正常的用户会被加载到识别人脸库
 - 如果现场一直无人脸、多人脸、模糊、侧脸、歪头或亮度异常，终端不会写考勤记录
 - 同一用户识别成功后会进入冷却时间，避免连续重复签到
+- 识别层通过后，终端现在还会再经过一层可配置的考勤规则门禁，只有规则放行才真正写库
+- 当前 `env.json` 已切到测试友好的 `interval_only` 模式，同一用户 `60` 秒内不会重复写入签到，便于现场反复测试
+- 后续如果要切回更正式的规则，只需要把 `attendance_rule_mode` 改成 `daily_once`
 - 如果你修改了 `camera_jpeg_quality` 或 `recognition_target_fps`，需要重启服务让新参数生效
 - 如果你需要指定一套固定的中文字体，可以在 `env.json` 中配置 `camera_overlay_font_path`
 - 当前终端页已把前端取景框、状态条和右侧信息卡整体缩小，并把视频流显示方式改成 `contain`
@@ -1466,14 +1469,21 @@ Windows 侧管理员项目不需要启动这个仓库里的额外服务，它只
 
 如果 Windows 侧只想看本次增量变化，重点阅读该文档最后的：
 
-- `13. 2026-04-21 增量变更记录`
+- `14. 2026-04-22 增量变更记录`
 
 本次对 Windows 侧可见的新增内容主要有：
 
+- `/api/admin/device/info`
+  - 新增 `attendance_policy`
 - `/api/admin/device/health` 的 `camera` 对象新增：
   - `known_faces_count`
   - `last_attendance_message`
   - `last_attendance_record`
+- `/api/admin/device/health`
+  - 新增 `attendance_policy`
+  - `camera` 下新增 `last_policy_event`
+- `/api/admin/device/metrics`
+  - 新增 `attendance_policy`
 - `GET /api/admin/attendance`
   - 现在会开始读到树莓派终端实时新增的真实签到记录
 - `GET /api/admin/attendance/today-summary`
@@ -1484,6 +1494,7 @@ Windows 侧管理员项目不需要启动这个仓库里的额外服务，它只
 - 本次没有修改已有管理员 API 的路由地址
 - 本次没有修改管理员 API 的 Bearer Token 鉴权方式
 - 本次主要是“新增字段”和“开始产生真实考勤数据”，不是破坏性修改
+- 最新一轮又新增了考勤规则策略摘要和最近一次规则判定结果，方便 Windows 端解释为什么这次识别被放行或拦截
 
 ### 9. 首页在线探测策略说明
 

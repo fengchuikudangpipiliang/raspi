@@ -1849,3 +1849,137 @@ Windows 端现在最少应接住这几个场景：
 文档已同步到：
 
 - [docs/raspberry_pi_admin_api.md](/home/luck/face3/docs/raspberry_pi_admin_api.md)
+
+## 十五、2026-04-26 考勤场景活体检测方案
+
+这一轮明确了活体检测的使用场景：
+
+- 不是注册上传时使用
+- 而是每天用户站到树莓派前进行实时考勤时使用
+
+### 1. 当前最适合本项目的活体思路
+
+结合树莓派算力、当前系统结构和考勤场景体验，当前最适合 `face3` 的方案是：
+
+`被动活体检测 -> 人脸识别 -> 灰区再触发主动活体`
+
+也就是：
+
+1. 用户进入摄像头画面
+2. 先做轻量被动活体检测
+3. 被动活体通过后再做人脸识别
+4. 如果活体分数或识别分数落在灰区，再触发一次简单动作挑战
+5. 通过后才允许签到
+
+### 2. 当前推荐模型
+
+当前最推荐直接接入的是 OpenVINO 的：
+
+- `anti-spoof-mn3`
+
+推荐原因：
+
+- 轻量
+- 官方文档明确
+- 输入固定为 `128x128`
+- 输出就是 `real / spoof` 二分类概率
+- 更适合树莓派 CPU 场景做前置被动活体
+
+模型定位：
+
+- 用于挡住手机翻拍、纸质照片、卡通头像、静态假脸等明显伪造输入
+- 不建议单独作为唯一活体方案
+- 更适合和后续简单动作挑战组合使用
+
+### 3. 建议在项目里的接入位置
+
+第一阶段建议接入：
+
+- [scripts/camera/strict_face_recognition.py](/home/luck/face3/scripts/camera/strict_face_recognition.py)
+
+推荐插入顺序：
+
+1. 检测到单张人脸
+2. 裁剪人脸区域
+3. 送入 `anti-spoof-mn3`
+4. 活体分数足够高才进入人脸编码识别
+5. 活体分数灰区时，再提示用户做一次简单转头挑战
+
+### 4. 推荐阈值思路
+
+第一版可以先按下面思路做：
+
+- `real_score >= 0.85`：直接进入识别
+- `0.65 <= real_score < 0.85`：灰区，触发主动活体
+- `real_score < 0.65`：直接拒绝签到
+
+说明：
+
+- 这是第一版起步阈值
+- 后续仍然要根据树莓派摄像头、现场补光和真实样本再调整
+
+### 5. 模型下载建议
+
+当前建议优先通过 OpenVINO Open Model Zoo 下载并转换：
+
+- 模型名：`anti-spoof-mn3`
+
+建议把模型放到项目目录下，例如：
+
+- `third_party/openvino_models/`
+
+这样后续接入代码时，模型路径管理会更清晰。
+
+### 6. 推荐下载命令
+
+下面这组命令用于：
+
+1. 安装 OpenVINO Python 包
+2. 拉取 Open Model Zoo 仓库
+3. 下载 `anti-spoof-mn3`
+4. 转换为 OpenVINO IR
+
+推荐在项目根目录执行：
+
+```bash
+cd /home/luck/face3
+uv venv .venv-omz --python 3.9
+source .venv-omz/bin/activate
+uv pip install --python .venv-omz/bin/python --upgrade pip setuptools wheel
+uv pip install --python .venv-omz/bin/python "openvino-dev==2024.6.0"
+mkdir -p third_party
+git clone --depth 1 https://github.com/openvinotoolkit/open_model_zoo.git third_party/open_model_zoo
+uv run --no-project --python .venv-omz/bin/python python third_party/open_model_zoo/tools/model_tools/downloader.py --name anti-spoof-mn3 --output_dir third_party/openvino_models
+uv run --no-project --python .venv-omz/bin/python python third_party/open_model_zoo/tools/model_tools/converter.py --name anti-spoof-mn3 --download_dir third_party/openvino_models --output_dir third_party/openvino_models_ir
+```
+
+转换完成后，推荐使用的模型路径通常类似：
+
+```bash
+/home/luck/face3/third_party/openvino_models_ir/public/anti-spoof-mn3/FP32/anti-spoof-mn3.xml
+```
+
+对应权重文件通常是：
+
+```bash
+/home/luck/face3/third_party/openvino_models_ir/public/anti-spoof-mn3/FP32/anti-spoof-mn3.bin
+```
+
+如果你本机 `omz_downloader` 和 `omz_converter` 命令已经可用，也可以直接用：
+
+```bash
+cd /home/luck/face3
+source .venv-omz/bin/activate
+uv run --no-project --python .venv-omz/bin/python omz_downloader --name anti-spoof-mn3 --output_dir third_party/openvino_models
+uv run --no-project --python .venv-omz/bin/python omz_converter --name anti-spoof-mn3 --download_dir third_party/openvino_models --output_dir third_party/openvino_models_ir
+```
+
+说明：
+
+- 当前树莓派环境如果仍然使用 Python `3.9`，建议固定使用 `openvino-dev==2024.6.0`
+- 因为更新的 `openvino` 包已经要求 Python `3.10+`
+- 当前文档里的 Python 包安装和模型工具执行命令已经统一改成 `uv`
+- 当前 `anti-spoof-mn3` 在 Open Model Zoo 中下载的是 `ONNX` 文件，因此这里不需要额外安装 `requirements-pytorch.in`
+- 如果去安装 `requirements-pytorch.in`，在当前项目目录下还可能把项目自己的 `dlib` 依赖一起卷进来，导致树莓派本地编译非常耗时
+- `uv run` 在项目目录里默认会先同步当前项目环境；如果只是执行下载脚本，不希望把 `face3` 自己的 `dlib` 等依赖一起带上，必须加 `--no-project`
+- 这里单独使用 `.venv-omz` 作为模型工具环境，避免影响主项目 `.venv`

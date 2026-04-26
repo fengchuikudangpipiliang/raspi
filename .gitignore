@@ -8,3 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+
+third_party/open_model_zoo/
+third_party/openvino_models/
+third_party/openvino_models_ir/
+.venv-omz/

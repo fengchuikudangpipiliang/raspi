@@ -1730,3 +1730,122 @@ Windows 端现在最少应接住这几个场景：
 后续正式上线时，这个值可以改回：
 
 - `86400` 秒，也就是 `24` 小时
+
+## 十四、2026-04-26 驳回原因与轻量存储补充
+
+这一轮继续把人脸审核流往正式系统的方向收了一步，重点是：
+
+1. 驳回原因不再只是一段自由备注，而是支持结构化可选项
+2. 人脸照片不再在树莓派本地长期堆积，只保留当前一份
+3. 驳回历史只保留最近三次，避免小系统数据越来越重
+
+### 1. 驳回原因结构化
+
+当前内置的驳回原因包括：
+
+- `cartoon_avatar`：卡通头像或虚拟形象
+- `screen_photo`：翻拍屏幕或电子设备照片
+- `printed_photo`：纸质照片或非真人现场
+- `face_not_clear`：人脸不清晰
+- `bad_lighting`：光线过强或过暗
+- `pose_invalid`：不是正脸或角度过大
+- `occluded_face`：口罩、帽子或遮挡过多
+- `multiple_faces`：画面中存在多人
+- `info_mismatch`：身份信息与照片不符
+- `other`：其他原因
+
+实现文件：
+
+- [scripts/face_review.py](/home/luck/face3/scripts/face_review.py)
+
+系统现在会同时保存：
+
+- `review_reason_codes`
+- `review_comment`
+
+其中：
+
+- `review_reason_codes` 用于固定原因多选
+- `review_comment` 用于补充说明
+
+### 2. 用户和管理员都能看到驳回原因
+
+当前展示逻辑：
+
+- 用户中心 `/portal/home` 会显示最近驳回原因和最近三次驳回记录
+- 人脸资料页 `/portal/face` 会显示当前驳回原因和最近三次驳回记录
+- Windows 管理端相关 API 会返回固定原因编码、中文标签和最近驳回历史
+
+相关文件：
+
+- [templates/portal_home.html](/home/luck/face3/templates/portal_home.html)
+- [scripts/web/templates/funnel_test.html](/home/luck/face3/scripts/web/templates/funnel_test.html)
+- [scripts/web/portal_submission_service.py](/home/luck/face3/scripts/web/portal_submission_service.py)
+- [scripts/admin_api.py](/home/luck/face3/scripts/admin_api.py)
+
+### 3. 最近三次驳回历史
+
+系统现在新增了一张轻量历史表：
+
+- `face_rejection_history`
+
+用途：
+
+- 给用户查看最近几次被驳回的原因
+- 给 Windows 管理端查看最近几次审核失败记录
+- 不需要依赖保留旧照片文件，也能知道为什么被驳回
+
+当前规则：
+
+- 每个用户只保留最近 `3` 次驳回历史
+- 超过 `3` 次时，自动删除更早记录
+
+相关配置：
+
+- `portal_face_rejection_history_limit`
+
+当前值：
+
+- `3`
+
+相关文件：
+
+- [env.json](/home/luck/face3/env.json)
+- [scripts/config/config.py](/home/luck/face3/scripts/config/config.py)
+- [scripts/database/sqlite_db.py](/home/luck/face3/scripts/database/sqlite_db.py)
+
+### 4. 当前照片替换策略
+
+为了减少树莓派本地无意义的数据堆积，用户重新上传人脸照片时，系统现在会：
+
+1. 先完成照片质量校验和编码提取
+2. 删除该账号之前保留的人脸照片文件
+3. 删除旧的 `face_profiles` 记录
+4. 只保存当前这一次新上传的照片
+
+也就是说：
+
+- 系统只保留“当前照片”这一份
+- 不再长期保留历史旧照片
+- 但最近三次驳回原因仍然会单独保留
+
+当前配置里 `portal_max_face_profiles` 也已经同步收成：
+
+- `1`
+
+### 5. Windows 管理端新增可见能力
+
+管理员 API 这次新增或增强了这些能力：
+
+- `GET /api/admin/face-profiles/rejection-reasons`
+  - 返回固定驳回原因列表
+- `GET /api/admin/users/{user_id}`
+  - 返回 `recent_face_rejections`
+- `GET /api/admin/face-profiles/{face_profile_id}`
+  - 返回 `recent_rejections`
+- `POST /api/admin/face-profiles/{face_profile_id}/review`
+  - 支持 `review_reason_codes`
+
+文档已同步到：
+
+- [docs/raspberry_pi_admin_api.md](/home/luck/face3/docs/raspberry_pi_admin_api.md)

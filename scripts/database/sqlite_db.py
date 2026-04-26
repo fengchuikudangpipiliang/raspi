@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Optional
 
 from scripts.config.config import cfg
+from scripts.face_review import normalize_review_reason_codes
+from scripts.face_review import serialize_review_reason_codes
 
 
 # 初始建库 SQL 只负责“新库从零创建”的完整结构。
@@ -43,11 +45,24 @@ CREATE TABLE IF NOT EXISTS face_profiles (
     image_path TEXT NOT NULL,
     encoding TEXT NOT NULL,
     review_status TEXT NOT NULL DEFAULT 'pending',
+    review_reason_codes TEXT,
     review_comment TEXT,
     reviewed_at TEXT,
     reviewed_by TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS face_rejection_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    face_profile_id INTEGER,
+    review_reason_codes TEXT NOT NULL,
+    review_comment TEXT,
+    reviewed_by TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (face_profile_id) REFERENCES face_profiles(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS attendance_records (
@@ -62,9 +77,9 @@ CREATE TABLE IF NOT EXISTS attendance_records (
 
 CREATE INDEX IF NOT EXISTS idx_roster_members_status ON roster_members(status);
 CREATE INDEX IF NOT EXISTS idx_face_profiles_user_id ON face_profiles(user_id);
-CREATE INDEX IF NOT EXISTS idx_face_profiles_review_status ON face_profiles(review_status);
 CREATE INDEX IF NOT EXISTS idx_attendance_records_user_id ON attendance_records(user_id);
 CREATE INDEX IF NOT EXISTS idx_attendance_records_check_time ON attendance_records(check_time);
+CREATE INDEX IF NOT EXISTS idx_face_rejection_history_user_id ON face_rejection_history(user_id);
 """
 
 
@@ -132,6 +147,7 @@ class SQLiteDB:
         connection.execute("CREATE INDEX IF NOT EXISTS idx_roster_members_status ON roster_members(status)")
         self._ensure_app_meta_table(connection)
         self._ensure_face_profile_review_columns(connection)
+        self._ensure_face_rejection_history_table(connection)
         self._migrate_legacy_utc_timestamps(connection)
 
     def _ensure_column(self, connection, table_name: str, column_name: str, alter_sql: str):
@@ -162,6 +178,8 @@ class SQLiteDB:
 
         if not self.column_exists(connection, "face_profiles", "review_status"):
             connection.execute("ALTER TABLE face_profiles ADD COLUMN review_status TEXT")
+        if not self.column_exists(connection, "face_profiles", "review_reason_codes"):
+            connection.execute("ALTER TABLE face_profiles ADD COLUMN review_reason_codes TEXT")
         if not self.column_exists(connection, "face_profiles", "review_comment"):
             connection.execute("ALTER TABLE face_profiles ADD COLUMN review_comment TEXT")
         if not self.column_exists(connection, "face_profiles", "reviewed_at"):
@@ -177,6 +195,31 @@ class SQLiteDB:
             """
         )
         connection.execute("CREATE INDEX IF NOT EXISTS idx_face_profiles_review_status ON face_profiles(review_status)")
+
+    def _ensure_face_rejection_history_table(self, connection) -> None:
+        """
+        创建最近驳回历史表。
+        这张表只保留轻量审核记录，不保存旧照片文件，用于用户和 Windows 管理端查看近三次驳回原因。
+        """
+
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS face_rejection_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                face_profile_id INTEGER,
+                review_reason_codes TEXT NOT NULL,
+                review_comment TEXT,
+                reviewed_by TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (face_profile_id) REFERENCES face_profiles(id) ON DELETE SET NULL
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_face_rejection_history_user_id ON face_rejection_history(user_id)"
+        )
 
     def _migrate_legacy_utc_timestamps(self, connection) -> None:
         """
@@ -209,6 +252,7 @@ class SQLiteDB:
             ("users", "password_changed_at"),
             ("users", "last_login_at"),
             ("face_profiles", "created_at"),
+            ("face_rejection_history", "created_at"),
             ("attendance_records", "check_time"),
         ]
         for table_name, column_name in targets:
@@ -598,12 +642,13 @@ class AttendanceRepository:
                     image_path,
                     encoding,
                     review_status,
+                    review_reason_codes,
                     review_comment,
                     reviewed_at,
                     reviewed_by,
                     created_at
                 )
-                VALUES (?, ?, ?, 'pending', NULL, NULL, NULL, ?)
+                VALUES (?, ?, ?, 'pending', NULL, NULL, NULL, NULL, ?)
                 """,
                 (user_id, image_path, encoding, now_text),
             )
@@ -628,6 +673,7 @@ class AttendanceRepository:
                     users.code,
                     face_profiles.image_path,
                     face_profiles.review_status,
+                    face_profiles.review_reason_codes,
                     face_profiles.review_comment,
                     face_profiles.reviewed_at,
                     face_profiles.reviewed_by,
@@ -665,6 +711,7 @@ class AttendanceRepository:
                     users.code,
                     face_profiles.image_path,
                     face_profiles.review_status,
+                    face_profiles.review_reason_codes,
                     face_profiles.review_comment,
                     face_profiles.reviewed_at,
                     face_profiles.reviewed_by,
@@ -694,6 +741,7 @@ class AttendanceRepository:
                     face_profiles.image_path,
                     face_profiles.encoding,
                     face_profiles.review_status,
+                    face_profiles.review_reason_codes,
                     face_profiles.review_comment,
                     face_profiles.reviewed_at,
                     face_profiles.reviewed_by,
@@ -710,8 +758,10 @@ class AttendanceRepository:
         self,
         face_profile_id: int,
         review_status: str,
+        review_reason_codes=None,
         review_comment: str = "",
         reviewed_by: str = "",
+        rejection_history_limit: int = 3,
     ) -> Optional[dict]:
         """
         更新人脸档案审核结果。
@@ -724,17 +774,31 @@ class AttendanceRepository:
 
         cleaned_comment = (review_comment or "").strip()
         cleaned_reviewer = (reviewed_by or "").strip()
+        normalized_reason_codes = normalize_review_reason_codes(review_reason_codes)
         reviewed_at = None if normalized_status == "pending" else local_now_text()
         if normalized_status == "pending":
             cleaned_comment = ""
             cleaned_reviewer = ""
+            normalized_reason_codes = []
+        if normalized_status == "approved":
+            normalized_reason_codes = []
+        if normalized_status == "rejected" and not normalized_reason_codes and not cleaned_comment:
+            raise ValueError("驳回时至少需要提供一种驳回原因或补充说明。")
 
         with self.db.session() as connection:
+            face_profile = connection.execute(
+                "SELECT id, user_id FROM face_profiles WHERE id = ?",
+                (face_profile_id,),
+            ).fetchone()
+            if not face_profile:
+                return None
+
             cursor = connection.execute(
                 """
                 UPDATE face_profiles
                 SET
                     review_status = ?,
+                    review_reason_codes = ?,
                     review_comment = ?,
                     reviewed_at = ?,
                     reviewed_by = ?
@@ -742,6 +806,7 @@ class AttendanceRepository:
                 """,
                 (
                     normalized_status,
+                    serialize_review_reason_codes(normalized_reason_codes) if normalized_reason_codes else None,
                     cleaned_comment or None,
                     reviewed_at,
                     cleaned_reviewer or None,
@@ -751,7 +816,87 @@ class AttendanceRepository:
             if cursor.rowcount <= 0:
                 return None
 
+            if normalized_status == "rejected":
+                connection.execute(
+                    """
+                    INSERT INTO face_rejection_history (
+                        user_id,
+                        face_profile_id,
+                        review_reason_codes,
+                        review_comment,
+                        reviewed_by,
+                        created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        int(face_profile["user_id"]),
+                        face_profile_id,
+                        serialize_review_reason_codes(normalized_reason_codes),
+                        cleaned_comment or None,
+                        cleaned_reviewer or None,
+                        reviewed_at,
+                    ),
+                )
+                safe_limit = max(int(rejection_history_limit), 1)
+                rows = connection.execute(
+                    """
+                    SELECT id
+                    FROM face_rejection_history
+                    WHERE user_id = ?
+                    ORDER BY id DESC
+                    """,
+                    (int(face_profile["user_id"]),),
+                ).fetchall()
+                stale_ids = [row["id"] for row in rows[safe_limit:]]
+                if stale_ids:
+                    placeholders = ",".join("?" for _ in stale_ids)
+                    connection.execute(
+                        f"DELETE FROM face_rejection_history WHERE id IN ({placeholders})",
+                        stale_ids,
+                    )
+
         return self.get_face_profile_by_id(face_profile_id)
+
+    def list_face_rejection_history_for_user(self, user_id: int, limit: int = 3):
+        """
+        读取某个用户最近几次被驳回的人脸审核记录。
+        这里只返回轻量历史，不保留旧照片文件，避免小系统数据无限膨胀。
+        """
+
+        safe_limit = max(int(limit), 1)
+        with self.db.session() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    id,
+                    user_id,
+                    face_profile_id,
+                    review_reason_codes,
+                    review_comment,
+                    reviewed_by,
+                    created_at
+                FROM face_rejection_history
+                WHERE user_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (user_id, safe_limit),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def delete_face_profiles_for_user(self, user_id: int) -> int:
+        """
+        删除某个用户当前保留的人脸档案记录。
+        上传新照片时会先清掉旧记录，避免系统里累积多份历史照片。
+        """
+
+        with self.db.session() as connection:
+            cursor = connection.execute(
+                "DELETE FROM face_profiles WHERE user_id = ?",
+                (user_id,),
+            )
+            return int(cursor.rowcount)
 
     def delete_face_profile(self, face_profile_id: int) -> bool:
         with self.db.session() as connection:

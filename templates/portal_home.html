@@ -71,6 +71,9 @@
                             {% if user.face_profile_ready %}{{ user.latest_face_review_status_label }}{% else %}待上传人脸资料{% endif %}
                         </div>
                         <p class="mb-0 mt-2 portal-status-copy">{{ user.face_review_hint }}</p>
+                        {% if user.latest_face_review_reason_labels %}
+                        <p class="mb-0 mt-2 portal-status-copy">驳回原因：{{ user.latest_face_review_reason_labels|join("、") }}</p>
+                        {% endif %}
                         {% if user.latest_face_review_comment %}
                         <p class="mb-0 mt-2 portal-status-copy">审核备注：{{ user.latest_face_review_comment }}</p>
                         {% endif %}
@@ -101,6 +104,27 @@
                     </div>
                 </div>
             </div>
+
+            {% if user.face_recent_rejections %}
+            <div class="portal-status-block mt-4">
+                <div class="panel-head mb-3">
+                    <div>
+                        <h2>最近驳回记录</h2>
+                    </div>
+                </div>
+                <div class="tip-list">
+                    {% for item in user.face_recent_rejections %}
+                    <div class="tip-card">
+                        <strong>{{ item.created_at }}</strong>
+                        <p>原因：{{ item.reason_labels|join("、") if item.reason_labels else "未填写固定原因" }}</p>
+                        {% if item.review_comment %}
+                        <p>备注：{{ item.review_comment }}</p>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
         </section>
     </div>
 </main>

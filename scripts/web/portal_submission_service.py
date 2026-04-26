@@ -10,6 +10,8 @@ from uuid import uuid4
 
 from scripts.config.config import cfg
 from scripts.database.sqlite_db import AttendanceRepository
+from scripts.face_review import build_review_reason_labels
+from scripts.face_review import normalize_review_reason_codes
 from scripts.web.account_security import hash_secret
 from scripts.web.account_security import normalize_code
 from scripts.web.account_security import normalize_name
@@ -36,9 +38,11 @@ class PortalAccountService:
         self.validation_pipeline = validation_pipeline or RegistrationValidationPipeline()
         self.roster_import_service = roster_import_service or RosterImportService(repo=self.repo)
         self.faces_dir = Path(cfg.faces_dir)
+        self.project_root = Path(__file__).resolve().parents[2]
         self.faces_dir.mkdir(parents=True, exist_ok=True)
         self.max_face_profiles = max(int(cfg.portal_max_face_profiles), 1)
         self.face_reupload_cooldown_seconds = max(int(cfg.portal_face_reupload_cooldown_seconds), 0)
+        self.face_rejection_history_limit = max(int(cfg.portal_face_rejection_history_limit), 1)
 
     def register_member(
         self,
@@ -138,9 +142,12 @@ class PortalAccountService:
         user["latest_face_review_status"] = review_status
         user["latest_face_review_status_label"] = self._get_review_status_label(review_status)
         user["latest_face_review_status_tone"] = self._get_review_status_tone(review_status)
+        user["latest_face_review_reason_codes"] = (latest_face_profile or {}).get("review_reason_codes") or []
+        user["latest_face_review_reason_labels"] = build_review_reason_labels(user["latest_face_review_reason_codes"])
         user["latest_face_review_comment"] = (latest_face_profile or {}).get("review_comment") or ""
         user["latest_face_reviewed_at"] = (latest_face_profile or {}).get("reviewed_at")
         user["face_profile_recognition_ready"] = user["approved_face_profiles_count"] > 0
+        user["face_recent_rejections"] = self._build_recent_rejections(user_id)
         cooldown = self.get_face_reupload_cooldown(user_id)
         user["face_reupload_cooldown_remaining_seconds"] = cooldown["remaining_seconds"]
         user["face_reupload_allowed"] = cooldown["allowed"]
@@ -209,9 +216,6 @@ class PortalAccountService:
             raise ValueError("登录状态已失效，请重新登录。")
         if user["face_profile_ready"] and not user["face_reupload_allowed"]:
             raise ValueError(user["face_reupload_message"] or "当前还不能重新上传人脸照片。")
-        if user["face_profiles_count"] >= self.max_face_profiles:
-            raise ValueError(f"当前账号最多只允许保存 {self.max_face_profiles} 份人脸档案。")
-
         context, passed, validation_results = self.validation_pipeline.validate_with_context(image_bytes)
         validation_payload = results_to_dicts(validation_results)
         if not passed:
@@ -223,11 +227,19 @@ class PortalAccountService:
 
         encoding = extract_face_encoding(context)
         image_path = self._save_face_image(user["code"], image_bytes, image_type)
-        face_profile_id = self.repo.save_face_profile(
-            user_id=user["id"],
-            image_path=image_path,
-            encoding=json.dumps(encoding.tolist(), ensure_ascii=False),
-        )
+        try:
+            self._replace_existing_face_profiles(user)
+            face_profile_id = self.repo.save_face_profile(
+                user_id=user["id"],
+                image_path=image_path,
+                encoding=json.dumps(encoding.tolist(), ensure_ascii=False),
+            )
+        except Exception:
+            saved_path = Path(image_path)
+            if not saved_path.is_absolute():
+                saved_path = self.project_root / saved_path
+            saved_path.unlink(missing_ok=True)
+            raise
 
         refreshed_user = self.require_user(user["id"])
         return {
@@ -287,6 +299,43 @@ class PortalAccountService:
         }
         return mapping.get((status or "").strip().lower(), "warning")
 
+    def _build_recent_rejections(self, user_id: int) -> list[dict]:
+        """
+        整理最近几次驳回历史，供用户中心和资料页直接展示。
+        """
+
+        items = self.repo.list_face_rejection_history_for_user(user_id, limit=self.face_rejection_history_limit)
+        results: list[dict] = []
+        for item in items:
+            reason_codes = normalize_review_reason_codes(item.get("review_reason_codes"))
+            results.append(
+                {
+                    "id": item["id"],
+                    "reason_codes": reason_codes,
+                    "reason_labels": build_review_reason_labels(reason_codes),
+                    "review_comment": item.get("review_comment") or "",
+                    "reviewed_by": item.get("reviewed_by") or "",
+                    "created_at": item.get("created_at") or "",
+                }
+            )
+        return results
+
+    def _replace_existing_face_profiles(self, user: dict) -> None:
+        """
+        上传新照片前，先删除当前账号旧的人脸照片文件和档案记录。
+        系统现在只保留一份当前照片，避免在树莓派上长期堆积历史图片。
+        """
+
+        for profile in user.get("face_profiles", []):
+            raw_path = (profile.get("image_path") or "").strip()
+            if not raw_path:
+                continue
+            image_path = Path(raw_path)
+            if not image_path.is_absolute():
+                image_path = self.project_root / image_path
+            image_path.unlink(missing_ok=True)
+        self.repo.delete_face_profiles_for_user(user["id"])
+
     def _build_face_review_hint(self, user: dict) -> str:
         """
         基于最近一次上传和审核结果，拼装用户中心要展示的状态说明。
@@ -302,10 +351,12 @@ class PortalAccountService:
                 return f"最近一张照片已审核通过，终端识别可使用这份档案。审核时间：{reviewed_at}"
             return "最近一张照片已审核通过，终端识别可使用这份档案。"
         if status == "rejected":
+            reason_labels = user.get("latest_face_review_reason_labels") or []
+            reason_text = f"原因：{'、'.join(reason_labels)}。" if reason_labels else ""
             comment = user.get("latest_face_review_comment") or "请重新拍摄更清晰的正脸照片后再次提交。"
             if int(user.get("approved_face_profiles_count") or 0) > 0:
-                return f"最近一张照片未通过审核。{comment} 当前终端仍会继续使用之前已通过审核的照片。"
-            return f"最近一张照片未通过审核。{comment}"
+                return f"最近一张照片未通过审核。{reason_text}{comment} 当前终端仍会继续使用之前已通过审核的照片。"
+            return f"最近一张照片未通过审核。{reason_text}{comment}"
         if int(user.get("approved_face_profiles_count") or 0) > 0:
             return "最近一张照片已提交，正在等待管理员审核。当前终端仍会继续使用之前已通过审核的照片。"
         return "最近一张照片已提交，正在等待管理员审核。"

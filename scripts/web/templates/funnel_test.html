@@ -166,6 +166,12 @@
                                 <p>{{ user.latest_face_review_comment }}</p>
                             </div>
                             {% endif %}
+                            {% if user.latest_face_review_reason_labels %}
+                            <div class="tip-card">
+                                <strong>驳回原因</strong>
+                                <p>{{ user.latest_face_review_reason_labels|join("、") }}</p>
+                            </div>
+                            {% endif %}
                             {% endif %}
                             <div class="tip-card">
                                 <strong>单人入镜</strong>
@@ -179,6 +185,17 @@
                             <div class="tip-card">
                                 <strong>重新上传已锁定</strong>
                                 <p>{{ user.face_reupload_message }}</p>
+                            </div>
+                            {% endif %}
+                            {% if user and user.face_recent_rejections %}
+                            <div class="tip-card">
+                                <strong>最近驳回记录</strong>
+                                {% for item in user.face_recent_rejections %}
+                                <p>{{ item.created_at }} · {{ item.reason_labels|join("、") if item.reason_labels else "未填写固定原因" }}</p>
+                                {% if item.review_comment %}
+                                <p>备注：{{ item.review_comment }}</p>
+                                {% endif %}
+                                {% endfor %}
                             </div>
                             {% endif %}
                         </div>

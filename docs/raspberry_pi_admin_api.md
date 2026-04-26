@@ -2064,3 +2064,112 @@ Authorization: Bearer your-admin-token
 - 用户上传后看到“待管理员审核”
 - 管理员审核通过后，照片才参与终端识别
 - 管理员驳回后，用户可以在冷却期结束后重新上传
+
+#### 15.20 2026-04-26 驳回原因与数据精简补充
+
+这次继续补了两类规则：
+
+1. 驳回原因改成结构化可选项
+2. 人脸照片不再长期堆积，只保留当前一份
+
+##### 15.20.1 管理员驳回原因可选项
+
+当前系统内置的驳回原因编码如下：
+
+- `cartoon_avatar`：卡通头像或虚拟形象
+- `screen_photo`：翻拍屏幕或电子设备照片
+- `printed_photo`：纸质照片或非真人现场
+- `face_not_clear`：人脸不清晰
+- `bad_lighting`：光线过强或过暗
+- `pose_invalid`：不是正脸或角度过大
+- `occluded_face`：口罩、帽子或遮挡过多
+- `multiple_faces`：画面中存在多人
+- `info_mismatch`：身份信息与照片不符
+- `other`：其他原因
+
+Windows 管理端可以直接调用：
+
+`GET /api/admin/face-profiles/rejection-reasons`
+
+示例返回：
+
+```json
+{
+  "ok": true,
+  "items": [
+    { "code": "cartoon_avatar", "label": "卡通头像或虚拟形象" },
+    { "code": "screen_photo", "label": "翻拍屏幕或电子设备照片" }
+  ],
+  "total": 10
+}
+```
+
+建议 Windows 管理端把这组数据渲染成多选项，再额外提供一个“补充备注”文本框。
+
+##### 15.20.2 审核接口新增驳回原因字段
+
+`POST /api/admin/face-profiles/{face_profile_id}/review`
+
+现在支持新增字段：
+
+- `review_reason_codes`
+
+驳回示例：
+
+```json
+{
+  "review_status": "rejected",
+  "review_reason_codes": ["cartoon_avatar", "screen_photo"],
+  "review_comment": "检测到头像样式异常，并且像是翻拍电子屏幕。",
+  "reviewed_by": "windows-admin-01"
+}
+```
+
+返回中会新增：
+
+- `review_reason_codes`
+- `review_reason_labels`
+- `recent_rejections`
+
+说明：
+
+- 当 `review_status = rejected` 时，建议至少选择一个固定原因
+- 当前后端规则是：驳回时至少要提供一种固定原因或补充备注
+
+##### 15.20.3 最近三次驳回历史
+
+为了让用户和管理员都能追踪最近几次失败原因，系统现在额外保留轻量驳回历史。
+
+当前策略：
+
+- 只保留最近 `3` 次驳回记录
+- 超过 `3` 次时，自动删除更早的驳回历史
+- 驳回历史只保存原因、备注、审核人、时间
+- 不保存旧照片文件
+
+相关返回位置：
+
+- `GET /api/admin/users/{user_id}` 返回 `recent_face_rejections`
+- `GET /api/admin/face-profiles/{face_profile_id}` 返回 `recent_rejections`
+- `POST /api/admin/face-profiles/{face_profile_id}/review` 审核后返回 `recent_rejections`
+
+另外，用户汇总返回里现在建议这样理解：
+
+- `face_profile_ready`：用户是否已经上传过照片
+- `face_profile_recognition_ready`：是否已经有审核通过、可参与终端识别的照片
+
+##### 15.20.4 当前照片保留策略
+
+为了避免树莓派本地长期堆积多份历史照片，用户每次重新上传成功后：
+
+- 系统会先删除该账号之前的人脸照片文件
+- 同时删除旧的 `face_profiles` 记录
+- 然后只保留当前最新上传的这一份照片
+
+也就是说：
+
+- 当前系统只保留“当前照片”这一份
+- 历史驳回原因保留最近三次
+- 历史旧照片不保留
+
+这套策略更适合树莓派这种小体量部署环境。

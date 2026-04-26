@@ -2,6 +2,7 @@ import base64
 import binascii
 import json
 import re
+from datetime import timedelta
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -37,6 +38,7 @@ class PortalAccountService:
         self.faces_dir = Path(cfg.faces_dir)
         self.faces_dir.mkdir(parents=True, exist_ok=True)
         self.max_face_profiles = max(int(cfg.portal_max_face_profiles), 1)
+        self.face_reupload_cooldown_seconds = max(int(cfg.portal_face_reupload_cooldown_seconds), 0)
 
     def register_member(
         self,
@@ -127,7 +129,56 @@ class PortalAccountService:
         user["face_profiles"] = face_profiles
         user["face_profiles_count"] = len(face_profiles)
         user["face_profile_ready"] = bool(face_profiles)
+        latest_face_profile = face_profiles[0] if face_profiles else None
+        user["latest_face_profile"] = latest_face_profile
+        cooldown = self.get_face_reupload_cooldown(user_id)
+        user["face_reupload_cooldown_remaining_seconds"] = cooldown["remaining_seconds"]
+        user["face_reupload_allowed"] = cooldown["allowed"]
+        user["face_reupload_locked_until"] = cooldown["locked_until"]
+        user["face_reupload_message"] = cooldown["message"]
         return user
+
+    def get_face_reupload_cooldown(self, user_id: int) -> dict:
+        """
+        计算当前账号距离下次允许重新上传人脸照片还剩多久。
+        只要已经成功上传过一张，就按最近一次上传时间进入冷却。
+        """
+        face_profiles = self.repo.list_face_profiles_for_user(user_id)
+        if not face_profiles or self.face_reupload_cooldown_seconds <= 0:
+            return {
+                "allowed": True,
+                "remaining_seconds": 0,
+                "locked_until": None,
+                "message": "",
+            }
+
+        latest_profile = face_profiles[0]
+        created_at = self._parse_local_datetime(latest_profile.get("created_at"))
+        if created_at is None:
+            return {
+                "allowed": True,
+                "remaining_seconds": 0,
+                "locked_until": None,
+                "message": "",
+            }
+
+        unlock_at = created_at + timedelta(seconds=self.face_reupload_cooldown_seconds)
+        now = datetime.now().astimezone()
+        remaining_seconds = max(int((unlock_at - now).total_seconds()), 0)
+        if remaining_seconds <= 0:
+            return {
+                "allowed": True,
+                "remaining_seconds": 0,
+                "locked_until": unlock_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "message": "",
+            }
+
+        return {
+            "allowed": False,
+            "remaining_seconds": remaining_seconds,
+            "locked_until": unlock_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "message": f"距离下次重新上传还需等待 {self._format_seconds(remaining_seconds)}",
+        }
 
     def submit_face_profile(self, user_id: int, image_data: str) -> dict:
         """
@@ -145,6 +196,8 @@ class PortalAccountService:
         user = self.require_user(user_id)
         if not user:
             raise ValueError("登录状态已失效，请重新登录。")
+        if user["face_profile_ready"] and not user["face_reupload_allowed"]:
+            raise ValueError(user["face_reupload_message"] or "当前还不能重新上传人脸照片。")
         if user["face_profiles_count"] >= self.max_face_profiles:
             raise ValueError(f"当前账号最多只允许保存 {self.max_face_profiles} 份人脸档案。")
 
@@ -175,6 +228,28 @@ class PortalAccountService:
             "validation_results": validation_payload,
             "face_profiles_count": refreshed_user["face_profiles_count"],
         }
+
+    def _parse_local_datetime(self, value: Optional[str]) -> Optional[datetime]:
+        text = (value or "").strip()
+        if not text:
+            return None
+        try:
+            return datetime.strptime(text, "%Y-%m-%d %H:%M:%S").astimezone()
+        except ValueError:
+            return None
+
+    def _format_seconds(self, seconds: int) -> str:
+        total = max(int(seconds), 0)
+        minutes, secs = divmod(total, 60)
+        hours, minutes = divmod(minutes, 60)
+        parts: list[str] = []
+        if hours:
+            parts.append(f"{hours} 小时")
+        if minutes:
+            parts.append(f"{minutes} 分钟")
+        if secs and not hours:
+            parts.append(f"{secs} 秒")
+        return "".join(parts) or "0 秒"
 
     def decode_register_payload(self, payload: dict) -> dict:
         """

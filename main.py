@@ -7,6 +7,8 @@ from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse
+from fastapi.responses import PlainTextResponse
 from fastapi.responses import RedirectResponse
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -25,7 +27,16 @@ from scripts.web.roster_import_service import RosterImportService
 # 项目根目录，模板和静态资源都基于它定位。
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-funnel_templates = Jinja2Templates(directory=str(BASE_DIR / "scripts" / "web" / "templates"))
+funnel_templates = Jinja2Templates(
+    directory=[
+        str(BASE_DIR / "scripts" / "web" / "templates"),
+        str(BASE_DIR / "templates"),
+    ]
+)
+LOCAL_TERMINAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+LOCAL_TERMINAL_PATHS = {"/", "/video_feed", "/healthz", "/api/terminal/status"}
+PORTAL_PATH_PREFIXES = ("/portal", "/api/portal", "/api/liveness", "/api/submissions")
+ALWAYS_ALLOWED_PREFIXES = ("/static", "/api/admin")
 
 # 创建主应用。
 APP_STARTED_AT = time()
@@ -76,41 +87,6 @@ USER_SCREEN_DATA = {
         "请勿遮挡摄像头与补光灯",
     ],
 }
-
-# 管理后台演示数据。
-ADMIN_DASHBOARD_DATA = {
-    "overview": [
-        {"label": "在册用户", "value": "186", "delta": "+12 本周新增"},
-        {"label": "今日已签到", "value": "128", "delta": "到勤率 84.8%"},
-        {"label": "迟到人数", "value": "6", "delta": "较昨日 -2"},
-        {"label": "待处理异常", "value": "4", "delta": "2 条需复核"},
-    ],
-    "user_levels": [
-        {"name": "学生", "count": 152, "color": "primary"},
-        {"name": "教师", "count": 24, "color": "success"},
-        {"name": "管理员", "count": 6, "color": "warning"},
-        {"name": "访客", "count": 4, "color": "info"},
-    ],
-    "today_attendance": [
-        {"time": "07:42", "name": "张三", "code": "S001", "result": "签到成功", "badge": "success"},
-        {"time": "07:48", "name": "李老师", "code": "T008", "result": "签到成功", "badge": "success"},
-        {"time": "08:03", "name": "王五", "code": "S016", "result": "迟到", "badge": "warning"},
-        {"time": "08:11", "name": "访客-01", "code": "V003", "result": "待人工确认", "badge": "secondary"},
-        {"time": "08:16", "name": "赵六", "code": "S021", "result": "识别失败", "badge": "danger"},
-    ],
-    "devices": [
-        {"name": "1F 东门终端", "status": "在线", "detail": "信号稳定 / CPU 43%"},
-        {"name": "2F 教师办公区", "status": "在线", "detail": "补光正常 / 延迟 42ms"},
-        {"name": "3F 实验室入口", "status": "告警", "detail": "摄像头画面偏暗"},
-    ],
-    "alerts": [
-        "08:16 发生 1 次连续识别失败，需要管理员检查现场光照。",
-        "访客身份待确认 2 人，建议在上午 10:00 前完成审核。",
-        "昨日晚间自动备份已完成，数据库状态正常。",
-    ],
-}
-
-
 @app.on_event("startup")
 def startup() -> None:
     """
@@ -146,6 +122,64 @@ def get_logged_in_user(request: Request):
     if not user_id:
         return None
     return portal_service.require_user(user_id)
+
+
+def get_request_host(request: Request) -> str:
+    """
+    统一解析请求主机名。
+    这里只关心是不是本地环回访问，不把端口差异带进访问策略判断。
+    """
+    raw_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    host = raw_host.split(",", 1)[0].strip()
+    if host.startswith("[") and "]" in host:
+        return host[1:host.index("]")]
+    return host.split(":", 1)[0].strip().lower()
+
+
+def is_portal_path(path: str) -> bool:
+    """
+    判断路径是否属于外网用户门户。
+    这些页面和接口允许远端成员访问，但不在树莓派本地终端浏览器里暴露。
+    """
+    return any(path == prefix or path.startswith(f"{prefix}/") for prefix in PORTAL_PATH_PREFIXES)
+
+
+def build_blocked_route_response(path: str):
+    """
+    被入口访问策略拦截时统一返回 404。
+    这样现场用户和公网用户都不会看到不该暴露的历史页面或内部入口。
+    """
+    if path.startswith("/api/"):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    return PlainTextResponse("Not Found", status_code=404)
+
+
+@app.middleware("http")
+async def restrict_page_entrypoints(request: Request, call_next):
+    """
+    统一控制页面入口：
+    - 本地 127.0.0.1 / localhost 只开放终端页 `/` 及其依赖接口
+    - 非本地访问只开放 `/portal/*` 这组用户门户页面和相关接口
+    - `/api/admin/*` 保留给 Windows 管理端调用
+    - 历史遗留的 `/admin` 页面直接下线
+    """
+    path = request.url.path
+    if any(path == prefix or path.startswith(f"{prefix}/") for prefix in ALWAYS_ALLOWED_PREFIXES):
+        return await call_next(request)
+    if path == "/admin" or path.startswith("/admin/"):
+        return build_blocked_route_response(path)
+
+    host = get_request_host(request)
+    if host in LOCAL_TERMINAL_HOSTS:
+        if path in LOCAL_TERMINAL_PATHS:
+            return await call_next(request)
+        return build_blocked_route_response(path)
+
+    if path == "/":
+        return RedirectResponse(url="/portal/login", status_code=307)
+    if is_portal_path(path):
+        return await call_next(request)
+    return build_blocked_route_response(path)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -196,22 +230,6 @@ def terminal_status():
         "camera_running": camera.running,
         "progress": camera.get_terminal_progress(),
     }
-
-
-@app.get("/admin", response_class=HTMLResponse)
-def admin_dashboard(request: Request):
-    """
-    管理后台原型页。
-    """
-    return templates.TemplateResponse(
-        "admin_dashboard.html",
-        {
-            "request": request,
-            "page_title": "后台管理",
-            "data": ADMIN_DASHBOARD_DATA,
-        },
-    )
-
 
 @app.get("/portal")
 def portal_index(request: Request):
@@ -282,6 +300,35 @@ def portal_home_page(request: Request):
     )
 
 
+@app.get("/portal/face-profiles/{face_profile_id}/image")
+def portal_face_profile_image(face_profile_id: int, request: Request):
+    """
+    登录用户查看自己已上传的人脸照片。
+    这里只允许访问当前账号自己的照片文件，避免把 data 目录直接暴露成静态目录。
+    """
+    current_user = get_logged_in_user(request)
+    if not current_user:
+        return RedirectResponse(url="/portal/login", status_code=303)
+
+    face_profile = portal_service.repo.get_face_profile_by_id(face_profile_id)
+    if not face_profile or face_profile["user_id"] != current_user["id"]:
+        return PlainTextResponse("Not Found", status_code=404)
+
+    image_path = Path(face_profile["image_path"])
+    if not image_path.is_absolute():
+        image_path = BASE_DIR / image_path
+    if not image_path.exists() or not image_path.is_file():
+        return PlainTextResponse("Not Found", status_code=404)
+
+    media_type = "image/jpeg"
+    suffix = image_path.suffix.lower()
+    if suffix == ".png":
+        media_type = "image/png"
+    elif suffix == ".webp":
+        media_type = "image/webp"
+    return FileResponse(str(image_path), media_type=media_type)
+
+
 @app.get("/portal/face", response_class=HTMLResponse)
 def portal_face_page(request: Request):
     """
@@ -297,6 +344,9 @@ def portal_face_page(request: Request):
         {
             "request": request,
             "page_title": "Face3 用户资料提交",
+            "portal_home_url": "/portal/home",
+            "portal_logout_url": "/api/portal/logout",
+            "portal_login_url": "/portal/login",
         },
     )
 

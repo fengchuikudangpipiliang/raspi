@@ -7,106 +7,75 @@
     <div class="container py-4 py-lg-5">
         <section class="portal-hero mb-4">
             <div>
-                <div class="eyebrow">Face3 User Center</div>
                 <h1 class="display-6 fw-bold mb-2">欢迎，{{ user.name }}</h1>
-                <p class="hero-copy mb-0">你的账号已经进入正式状态。接下来可以上传人脸资料，供树莓派终端后续识别考勤使用。</p>
             </div>
             <div class="portal-actions">
-                <a class="btn btn-outline-light btn-soft" href="{{ url_for('portal_face_page') }}">上传人脸</a>
                 <button class="btn btn-warning btn-soft" id="logout-button" type="button">退出登录</button>
             </div>
         </section>
 
-        <div class="row g-4">
-            <div class="col-lg-8">
-                <section class="portal-card">
-                    <div class="panel-head">
-                        <div>
-                            <h2>账号概览</h2>
-                            <p>以下状态会影响你能否被终端正常识别。</p>
-                        </div>
+        <section class="portal-card">
+            <div class="panel-head">
+                <div>
+                    <h2>账号概览</h2>
+                </div>
+            </div>
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <div class="portal-stat-card">
+                        <span>姓名</span>
+                        <strong>{{ user.name }}</strong>
                     </div>
-                    <div class="row g-3">
-                        <div class="col-md-4">
-                            <div class="portal-stat-card">
-                                <span>姓名</span>
-                                <strong>{{ user.name }}</strong>
-                            </div>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="portal-stat-card">
-                                <span>学号/工号</span>
-                                <strong>{{ user.code }}</strong>
-                            </div>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="portal-stat-card">
-                                <span>角色</span>
-                                <strong>{{ user.roster_role or "member" }}</strong>
-                            </div>
-                        </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="portal-stat-card">
+                        <span>学号/工号</span>
+                        <strong>{{ user.code }}</strong>
                     </div>
-                    <div class="portal-status-block mt-4">
+                </div>
+                <div class="col-md-4">
+                    <div class="portal-stat-card">
+                        <span>角色</span>
+                        <strong>{{ user.roster_role or "member" }}</strong>
+                    </div>
+                </div>
+            </div>
+
+            <div class="portal-status-block mt-4">
+                <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-3">
+                    <div>
                         <div class="status-pill {% if user.face_profile_ready %}ok{% else %}warning{% endif %}">
                             {% if user.face_profile_ready %}已上传人脸资料{% else %}待上传人脸资料{% endif %}
                         </div>
-                        <p class="mb-0 mt-3">
-                            当前已保存 {{ user.face_profiles_count }} 份人脸档案。
-                            {% if user.face_profile_ready %}
-                            你已经具备后续接入终端识别的基础数据。
-                            {% else %}
-                            请尽快上传至少 1 张清晰正脸照片。
-                            {% endif %}
-                        </p>
+                        <p class="mb-0 mt-3">当前已保存 {{ user.face_profiles_count }} 份人脸档案。</p>
+                        {% if user.latest_face_profile %}
+                        <p class="mb-0 mt-2 portal-status-copy">最近上传：{{ user.latest_face_profile.created_at }}</p>
+                        {% endif %}
+                        {% if user.face_profile_ready and not user.face_reupload_allowed %}
+                        <p class="mb-0 mt-2 portal-status-copy">{{ user.face_reupload_message }}</p>
+                        {% endif %}
                     </div>
-                </section>
-            </div>
 
-            <div class="col-lg-4">
-                <section class="portal-card h-100">
-                    <div class="panel-head">
-                        <div>
-                            <h2>下一步</h2>
-                            <p>建议按下面顺序完成准备。</p>
-                        </div>
+                    <div class="d-flex flex-wrap gap-3">
+                        {% if not user.face_profile_ready %}
+                        <a class="btn btn-outline-light btn-soft" href="{{ url_for('portal_face_page') }}">上传人脸照片</a>
+                        {% else %}
+                        <a
+                            class="btn btn-outline-light btn-soft"
+                            href="/portal/face-profiles/{{ user.latest_face_profile.id }}/image"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                        >查看照片</a>
+                        {% if user.face_reupload_allowed %}
+                        <a class="btn btn-outline-light btn-soft" href="{{ url_for('portal_face_page') }}">重新上传人脸照片</a>
+                        {% else %}
+                        <button class="btn btn-outline-light btn-soft" type="button" disabled>重新上传人脸照片</button>
+                        {% endif %}
+                        {% endif %}
                     </div>
-                    <div class="portal-tips">
-                        <div class="portal-tip-item">
-                            <strong>1. 上传清晰正脸</strong>
-                            <span>避免逆光、模糊、多人同框和大角度侧脸。</span>
-                        </div>
-                        <div class="portal-tip-item">
-                            <strong>2. 等待后续识别流接入</strong>
-                            <span>当前系统已能保存编码，后续会把它接到实时识别环节。</span>
-                        </div>
-                        <div class="portal-tip-item">
-                            <strong>3. 保管正式密码</strong>
-                            <span>后续登录只认新密码，初始密码不会再用于登录。</span>
-                        </div>
-                    </div>
-                </section>
-            </div>
-        </div>
-
-        {% if user.face_profiles %}
-        <section class="portal-card mt-4">
-            <div class="panel-head">
-                <div>
-                    <h2>已上传的人脸档案</h2>
-                    <p>这里只展示本地落盘记录，后续可继续扩展审核状态。</p>
                 </div>
-            </div>
-            <div class="portal-record-list">
-                {% for item in user.face_profiles %}
-                <div class="portal-record-item">
-                    <strong>#{{ item.id }}</strong>
-                    <span>{{ item.image_path }}</span>
-                    <span>{{ item.created_at }}</span>
-                </div>
-                {% endfor %}
             </div>
         </section>
-        {% endif %}
     </div>
 </main>
 

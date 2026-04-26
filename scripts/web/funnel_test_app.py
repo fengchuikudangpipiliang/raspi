@@ -9,6 +9,7 @@ from uuid import uuid4
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from scripts.web.liveness import LivenessChallengeService
@@ -22,7 +23,12 @@ DATA_DIR = BASE_DIR / "data" / "funnel_registrations"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # 前端模板目录。
-templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
+templates = Jinja2Templates(
+    directory=[
+        str(TEMPLATE_DIR),
+        str(BASE_DIR / "templates"),
+    ]
+)
 
 # 允许的图片类型和最大字节数。
 ALLOWED_IMAGE_TYPES = {"jpeg", "png", "webp"}
@@ -30,6 +36,7 @@ MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 # 独立测试应用，后续可逐步升级成真正的公网注册入口。
 app = FastAPI(title="face3-funnel-test")
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 # 质量校验流水线统一在这里初始化，后续替换或扩展校验器时不需要改路由逻辑。
 validation_pipeline = RegistrationValidationPipeline()
 # 活体挑战服务独立管理会话和受信任截图，避免在路由层堆逻辑。
@@ -157,6 +164,9 @@ def funnel_test_page(request: Request):
         {
             "request": request,
             "page_title": "Face3 用户资料提交",
+            "portal_home_url": None,
+            "portal_logout_url": None,
+            "portal_login_url": None,
         },
     )
 

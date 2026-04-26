@@ -41,6 +41,7 @@ DEFAULT_CONFIG = {
     "session_secret_key": "face3-dev-change-this-secret",
     "session_cookie_name": "face3_session",
     "portal_max_face_profiles": 3,
+    "portal_face_reupload_cooldown_seconds": 300,
     "snapshots_dir": "data/snapshots",
     "logs_dir": "logs",
     "attendance_cooldown_seconds": 60,

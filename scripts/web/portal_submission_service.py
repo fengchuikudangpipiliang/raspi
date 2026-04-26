@@ -128,14 +128,25 @@ class PortalAccountService:
         face_profiles = self.repo.list_face_profiles_for_user(user_id)
         user["face_profiles"] = face_profiles
         user["face_profiles_count"] = len(face_profiles)
+        user["approved_face_profiles_count"] = sum(1 for item in face_profiles if item.get("review_status") == "approved")
+        user["pending_face_profiles_count"] = sum(1 for item in face_profiles if item.get("review_status") == "pending")
+        user["rejected_face_profiles_count"] = sum(1 for item in face_profiles if item.get("review_status") == "rejected")
         user["face_profile_ready"] = bool(face_profiles)
         latest_face_profile = face_profiles[0] if face_profiles else None
         user["latest_face_profile"] = latest_face_profile
+        review_status = (latest_face_profile or {}).get("review_status") or ""
+        user["latest_face_review_status"] = review_status
+        user["latest_face_review_status_label"] = self._get_review_status_label(review_status)
+        user["latest_face_review_status_tone"] = self._get_review_status_tone(review_status)
+        user["latest_face_review_comment"] = (latest_face_profile or {}).get("review_comment") or ""
+        user["latest_face_reviewed_at"] = (latest_face_profile or {}).get("reviewed_at")
+        user["face_profile_recognition_ready"] = user["approved_face_profiles_count"] > 0
         cooldown = self.get_face_reupload_cooldown(user_id)
         user["face_reupload_cooldown_remaining_seconds"] = cooldown["remaining_seconds"]
         user["face_reupload_allowed"] = cooldown["allowed"]
         user["face_reupload_locked_until"] = cooldown["locked_until"]
         user["face_reupload_message"] = cooldown["message"]
+        user["face_review_hint"] = self._build_face_review_hint(user)
         return user
 
     def get_face_reupload_cooldown(self, user_id: int) -> dict:
@@ -221,12 +232,13 @@ class PortalAccountService:
         refreshed_user = self.require_user(user["id"])
         return {
             "ok": True,
-            "message": "人脸资料上传成功，后续识别会使用这份编码。",
+            "message": "人脸资料已提交，等待管理员审核。审核通过后才会用于终端识别。",
             "face_profile_id": face_profile_id,
             "submission_id": f"face-profile-{face_profile_id}",
             "image_path": image_path,
             "validation_results": validation_payload,
             "face_profiles_count": refreshed_user["face_profiles_count"],
+            "review_status": refreshed_user["latest_face_review_status"],
         }
 
     def _parse_local_datetime(self, value: Optional[str]) -> Optional[datetime]:
@@ -250,6 +262,53 @@ class PortalAccountService:
         if secs and not hours:
             parts.append(f"{secs} 秒")
         return "".join(parts) or "0 秒"
+
+    def _get_review_status_label(self, status: str) -> str:
+        """
+        把数据库中的审核状态翻译成页面上更直观的中文文案。
+        """
+
+        mapping = {
+            "pending": "待管理员审核",
+            "approved": "审核通过",
+            "rejected": "审核未通过",
+        }
+        return mapping.get((status or "").strip().lower(), "未上传")
+
+    def _get_review_status_tone(self, status: str) -> str:
+        """
+        返回页面状态胶囊使用的语义色。
+        """
+
+        mapping = {
+            "pending": "working",
+            "approved": "ok",
+            "rejected": "fail",
+        }
+        return mapping.get((status or "").strip().lower(), "warning")
+
+    def _build_face_review_hint(self, user: dict) -> str:
+        """
+        基于最近一次上传和审核结果，拼装用户中心要展示的状态说明。
+        """
+
+        if not user.get("latest_face_profile"):
+            return "尚未提交人脸照片。"
+
+        status = (user.get("latest_face_review_status") or "").strip().lower()
+        if status == "approved":
+            reviewed_at = user.get("latest_face_reviewed_at")
+            if reviewed_at:
+                return f"最近一张照片已审核通过，终端识别可使用这份档案。审核时间：{reviewed_at}"
+            return "最近一张照片已审核通过，终端识别可使用这份档案。"
+        if status == "rejected":
+            comment = user.get("latest_face_review_comment") or "请重新拍摄更清晰的正脸照片后再次提交。"
+            if int(user.get("approved_face_profiles_count") or 0) > 0:
+                return f"最近一张照片未通过审核。{comment} 当前终端仍会继续使用之前已通过审核的照片。"
+            return f"最近一张照片未通过审核。{comment}"
+        if int(user.get("approved_face_profiles_count") or 0) > 0:
+            return "最近一张照片已提交，正在等待管理员审核。当前终端仍会继续使用之前已通过审核的照片。"
+        return "最近一张照片已提交，正在等待管理员审核。"
 
     def decode_register_payload(self, payload: dict) -> dict:
         """

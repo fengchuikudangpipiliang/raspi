@@ -5,9 +5,21 @@
 {% block content %}
 <main class="portal-shell portal-face-shell">
     <div class="container py-4 py-lg-5">
-        <section class="portal-hero mb-4">
-            <div>
-                <h1 class="display-6 fw-bold mb-2">提交人脸资料</h1>
+        <section class="portal-topbar mb-4">
+            <div class="portal-topbar-main">
+                <div class="portal-topbar-title">
+                    <h1 class="display-6 fw-bold mb-1">提交人脸资料</h1>
+                    {% if user and user.face_profile_ready and not user.face_reupload_allowed %}
+                    <p class="hero-copy mb-0">{{ user.face_reupload_message }}</p>
+                    {% else %}
+                    <p class="hero-copy mb-0">完成采集后提交，资料会进入管理员审核。</p>
+                    {% endif %}
+                </div>
+                {% if user %}
+                <div class="portal-topbar-meta">
+                    <span class="portal-kicker">{{ user.code }}</span>
+                </div>
+                {% endif %}
             </div>
             <div class="portal-actions">
                 {% if portal_home_url %}
@@ -26,6 +38,9 @@
                         <div>
                             <h2>资料与采集</h2>
                         </div>
+                        {% if user and user.face_profile_ready %}
+                        <span class="panel-chip">{{ user.latest_face_review_status_label }}</span>
+                        {% endif %}
                     </div>
 
                     <form id="registration-form" class="portal-form">
@@ -72,10 +87,10 @@
                                     <section class="capture-sidebar-block">
                                         <h3 class="capture-sidebar-title">动作挑战</h3>
                                         <div class="source-actions">
-                                            <button class="button warning" type="button" id="start_camera_button">开启摄像头</button>
+                                            <button class="button warning" type="button" id="start_camera_button" {% if user and user.face_profile_ready and not user.face_reupload_allowed %}disabled{% endif %}>开启摄像头</button>
                                             <button class="button secondary" type="button" id="start_challenge_button" disabled>开始动作挑战</button>
                                             <button class="button secondary" type="button" id="stop_camera_button" disabled>关闭摄像头</button>
-                                            <button class="button secondary" type="button" id="clear_preview_button">清空当前照片</button>
+                                            <button class="button secondary" type="button" id="clear_preview_button" {% if user and user.face_profile_ready and not user.face_reupload_allowed %}disabled{% endif %}>清空当前照片</button>
                                         </div>
                                     </section>
 
@@ -132,22 +147,40 @@
                     <section class="portal-card">
                         <div class="panel-head">
                             <div>
-                                <h2>提交提示</h2>
+                                <h2>当前状态</h2>
                             </div>
                         </div>
                         <div class="tip-list">
+                            {% if user and user.face_profile_ready %}
+                            <div class="tip-card">
+                                <strong>当前审核状态</strong>
+                                <p>{{ user.latest_face_review_status_label }}</p>
+                            </div>
+                            <div class="tip-card">
+                                <strong>最近上传</strong>
+                                <p>{{ user.latest_face_profile.created_at }}</p>
+                            </div>
+                            {% if user.latest_face_review_comment %}
+                            <div class="tip-card">
+                                <strong>审核备注</strong>
+                                <p>{{ user.latest_face_review_comment }}</p>
+                            </div>
+                            {% endif %}
+                            {% endif %}
                             <div class="tip-card">
                                 <strong>单人入镜</strong>
                                 <p>保持正脸，画面清晰。</p>
                             </div>
                             <div class="tip-card">
                                 <strong>完成挑战后提交</strong>
-                                <p>通过后会自动锁定最终照片。</p>
+                                <p>通过后会自动锁定最终照片，并进入审核流程。</p>
                             </div>
+                            {% if user and user.face_profile_ready and not user.face_reupload_allowed %}
                             <div class="tip-card">
-                                <strong>提交后可返回</strong>
-                                <p>资料页和用户中心现在可以互相跳转。</p>
+                                <strong>重新上传已锁定</strong>
+                                <p>{{ user.face_reupload_message }}</p>
                             </div>
+                            {% endif %}
                         </div>
                     </section>
                 </div>
@@ -181,6 +214,7 @@
     const challengeSteps = document.getElementById("challenge_steps");
     const challengeStepsEmpty = document.getElementById("challenge_steps_empty");
     const portalLogoutButton = document.getElementById("portal-logout-button");
+    const faceUploadLocked = {{ "true" if user and user.face_profile_ready and not user.face_reupload_allowed else "false" }};
 
     let previewData = "";
     let stream = null;
@@ -423,6 +457,10 @@
 
     startCameraButton.addEventListener("click", async () => {
         clearMessage();
+        if (faceUploadLocked) {
+            showMessage("当前还不能重新上传人脸照片。", "error");
+            return;
+        }
         try {
             stopCamera();
             stream = await navigator.mediaDevices.getUserMedia({
@@ -448,6 +486,10 @@
 
     startChallengeButton.addEventListener("click", async () => {
         clearMessage();
+        if (faceUploadLocked) {
+            showMessage("当前还不能重新上传人脸照片。", "error");
+            return;
+        }
         if (!stream) {
             showMessage("摄像头尚未准备好，请稍后重试。", "error");
             return;
@@ -510,6 +552,10 @@
     form.addEventListener("submit", async (event) => {
         event.preventDefault();
         clearMessage();
+        if (faceUploadLocked) {
+            showMessage("当前还不能重新上传人脸照片。", "error");
+            return;
+        }
 
         const payload = {
             full_name: document.getElementById("full_name").value,
@@ -560,5 +606,8 @@
 
     clearLivenessStatus();
     clearValidationResults();
+    if (faceUploadLocked) {
+        showMessage("当前还不能重新上传人脸照片。", "error");
+    }
 </script>
 {% endblock %}

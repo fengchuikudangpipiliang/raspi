@@ -108,7 +108,7 @@ def save_submission(
         "challenge_id": payload.get("challenge_id", ""),
         "consent": bool(payload.get("consent")),
         "image_path": str(image_path.relative_to(BASE_DIR)),
-        "review_status": "pending_review",
+        "review_status": "pending",
         "liveness": liveness_payload,
         "validation_results": validation_results,
         "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -164,6 +164,7 @@ def funnel_test_page(request: Request):
         {
             "request": request,
             "page_title": "Face3 用户资料提交",
+            "user": None,
             "portal_home_url": None,
             "portal_logout_url": None,
             "portal_login_url": None,

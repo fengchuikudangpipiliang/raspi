@@ -344,6 +344,7 @@ def portal_face_page(request: Request):
         {
             "request": request,
             "page_title": "Face3 用户资料提交",
+            "user": current_user,
             "portal_home_url": "/portal/home",
             "portal_logout_url": "/api/portal/logout",
             "portal_login_url": "/portal/login",

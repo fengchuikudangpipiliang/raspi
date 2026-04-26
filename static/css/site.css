@@ -304,6 +304,82 @@ canvas {
     box-shadow: var(--shadow-panel);
 }
 
+.portal-topbar {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.portal-topbar-main {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.9rem;
+    flex-wrap: wrap;
+}
+
+.portal-topbar-title {
+    display: grid;
+    gap: 0.2rem;
+}
+
+.portal-topbar-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.portal-kicker {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.2rem;
+    padding: 0.42rem 0.8rem;
+    border-radius: var(--radius-pill);
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid var(--color-border);
+    color: var(--color-accent-strong);
+    font-weight: 700;
+    font-size: 0.84rem;
+}
+
+.portal-auth-grid {
+    display: grid;
+    grid-template-columns: minmax(280px, 0.9fr) minmax(0, 1.1fr);
+    gap: 1.25rem;
+    align-items: stretch;
+}
+
+.portal-auth-intro,
+.portal-auth-card {
+    min-height: 100%;
+}
+
+.portal-auth-intro {
+    display: grid;
+    align-content: start;
+    gap: 0.9rem;
+    padding-block: 1.6rem;
+}
+
+.portal-auth-points {
+    display: grid;
+    gap: 0.9rem;
+}
+
+.portal-auth-point {
+    display: grid;
+    gap: 0.3rem;
+    padding: 1rem;
+    border-radius: var(--radius-card);
+    background: rgba(255, 255, 255, 0.62);
+    border: 1px solid var(--color-border);
+}
+
+.portal-auth-point strong {
+    color: var(--color-text-strong);
+}
+
 .stage-toolbar,
 .section-title {
     margin-bottom: 1rem;
@@ -693,12 +769,14 @@ canvas {
     color: #9b6f22;
 }
 
+.status-pill.working,
 .status-chip.working {
     border-color: rgba(76, 140, 245, 0.18);
     background: var(--color-accent-soft);
     color: var(--color-accent-strong);
 }
 
+.status-pill.fail,
 .status-chip.fail {
     border-color: rgba(223, 110, 114, 0.22);
     background: var(--color-danger-soft);
@@ -861,6 +939,13 @@ canvas {
 
 .portal-status-block {
     color: var(--color-text);
+}
+
+.portal-action-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
 }
 
 .portal-preview {
@@ -1252,6 +1337,10 @@ canvas {
     .capture-sidebar {
         border-top: 1px solid rgba(25, 53, 79, 0.08);
         border-left: 0;
+    }
+
+    .portal-auth-grid {
+        grid-template-columns: 1fr;
     }
 }
 

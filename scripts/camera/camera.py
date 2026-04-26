@@ -66,11 +66,21 @@ class VideoCamera:
         self.latest_recognition_frame_id = 0
         self.last_processed_recognition_frame_id = 0
 
+        self._initialize_recognizer()
+
+    def _initialize_recognizer(self) -> None:
+        """
+        初始化严格识别器并加载当前已生效的人脸档案。
+        应用启动早期数据库可能还没完成迁移，因此这里既在构造期尝试一次，
+        也会在 `start()` 前再次兜底，确保老库升级后不需要人工重启第二次。
+        """
+
         try:
             self.recognizer = StrictFaceRecognizer()
             count = self.recognizer.reload_known_faces()
             self.next_recognition_reload_at = time.time() + self.recognition_reload_interval_seconds
             self.last_attendance_message = f"已加载 {count} 份人脸档案"
+            self.last_error = None
         except Exception as error:
             self.recognizer = None
             self.last_error = f"recognizer_init_failed: {error}"
@@ -82,6 +92,8 @@ class VideoCamera:
 
         if self.running:
             return
+        if self.recognizer is None:
+            self._initialize_recognizer()
         self.running = True
         self.worker = threading.Thread(target=self._capture_loop, daemon=True)
         self.worker.start()

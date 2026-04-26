@@ -1883,3 +1883,184 @@ Windows 端如果要“完成树莓派当前提供的所有功能”，最低要
 - 编辑成员：`PUT /api/admin/roster-members/{roster_member_id}`
 
 这样即使管理员还在手工编辑树莓派本地 CSV，Windows 端也能通过查询或强制同步看到最新结果；如果后面改成完全走 API 维护名单，也不需要再重启树莓派服务。
+
+#### 15.19 2026-04-26 人脸档案审核流补充
+
+从 `2026-04-26` 这次版本开始，用户门户上传的人脸照片不再默认直接生效，而是进入“待审核”状态。
+
+当前约定如下：
+
+- 新上传的人脸档案默认是 `pending`
+- 管理员审核通过后状态变成 `approved`
+- 管理员审核不通过后状态变成 `rejected`
+- 树莓派终端的人脸识别只会加载 `approved` 的档案
+- 历史版本已经存在的人脸档案，在数据库升级时会自动回填为 `approved`，避免现场识别突然全部失效
+
+`review_status` 目前只允许这 3 个值：
+
+- `pending`
+- `approved`
+- `rejected`
+
+Windows 管理端至少应补齐这 3 个操作：
+
+1. 拉取待审核照片列表
+2. 查看单张照片和审核备注
+3. 提交“通过 / 不通过”审核结果
+
+##### 15.19.1 获取人脸档案列表时按审核状态过滤
+
+`GET /api/admin/face-profiles`
+
+新增查询参数：
+
+- `review_status`
+
+示例：
+
+```http
+GET /api/admin/face-profiles?review_status=pending&limit=50 HTTP/1.1
+Authorization: Bearer your-admin-token
+```
+
+返回项现在新增这些字段：
+
+- `review_status`
+- `review_comment`
+- `reviewed_at`
+- `reviewed_by`
+- `recognition_enabled`
+
+示例返回：
+
+```json
+{
+  "ok": true,
+  "items": [
+    {
+      "id": 12,
+      "user_id": 5,
+      "name": "张三",
+      "code": "S2026001",
+      "image_path": "data/faces/S2026001/20260426112000-a1b2c3d4.jpeg",
+      "review_status": "pending",
+      "review_comment": null,
+      "reviewed_at": null,
+      "reviewed_by": null,
+      "recognition_enabled": false,
+      "created_at": "2026-04-26 11:20:00",
+      "image_url": "/api/admin/face-profiles/12/image"
+    }
+  ],
+  "total": 1
+}
+```
+
+说明：
+
+- `recognition_enabled=true` 只会出现在 `approved`
+- Windows 管理端最常用的第一页通常就是 `review_status=pending`
+
+##### 15.19.2 获取单条人脸档案详情
+
+`GET /api/admin/face-profiles/{face_profile_id}`
+
+用途：
+
+- 审核弹窗或详情页显示完整状态
+- 拉取审核备注、审核人、审核时间
+
+示例返回：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "id": 12,
+    "user_id": 5,
+    "name": "张三",
+    "code": "S2026001",
+    "image_path": "data/faces/S2026001/20260426112000-a1b2c3d4.jpeg",
+    "review_status": "pending",
+    "review_comment": null,
+    "reviewed_at": null,
+    "reviewed_by": null,
+    "recognition_enabled": false,
+    "created_at": "2026-04-26 11:20:00",
+    "image_url": "/api/admin/face-profiles/12/image"
+  }
+}
+```
+
+##### 15.19.3 审核人脸档案
+
+`POST /api/admin/face-profiles/{face_profile_id}/review`
+
+请求体：
+
+```json
+{
+  "review_status": "approved",
+  "review_comment": "正脸清晰，可用于考勤识别。",
+  "reviewed_by": "windows-admin-01"
+}
+```
+
+字段说明：
+
+- `review_status` 必填，只允许 `pending`、`approved`、`rejected`
+- `review_comment` 可选，建议 Windows 管理端在驳回时强制填写
+- `reviewed_by` 可选，建议写入当前管理员账号、设备名或操作人标识
+
+如果要驳回，示例：
+
+```json
+{
+  "review_status": "rejected",
+  "review_comment": "照片侧脸角度过大，请重新采集正脸。",
+  "reviewed_by": "windows-admin-01"
+}
+```
+
+成功返回示例：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "id": 12,
+    "user_id": 5,
+    "name": "张三",
+    "code": "S2026001",
+    "image_path": "data/faces/S2026001/20260426112000-a1b2c3d4.jpeg",
+    "review_status": "approved",
+    "review_comment": "正脸清晰，可用于考勤识别。",
+    "reviewed_at": "2026-04-26 11:30:42",
+    "reviewed_by": "windows-admin-01",
+    "recognition_enabled": true,
+    "created_at": "2026-04-26 11:20:00",
+    "image_url": "/api/admin/face-profiles/12/image"
+  }
+}
+```
+
+说明：
+
+- 审核通过后，树莓派终端只会在下一轮人脸库热重载后开始使用该照片
+- 当前终端识别人脸库默认每 `60` 秒自动热重载一次，因此通常不需要手工重启服务
+- 如果审核结果改回 `pending`，系统会清空审核时间、审核人和审核备注
+
+##### 15.19.4 Windows 管理端页面建议
+
+建议 Windows 管理端至少提供以下字段和动作：
+
+- 列表字段：姓名、学号/工号、上传时间、审核状态
+- 详情字段：照片、审核备注、审核时间、审核人
+- 操作按钮：通过、驳回、查看原图
+- 过滤器：全部 / 待审核 / 已通过 / 已驳回
+
+这样用户门户、树莓派终端和 Windows 管理端的语义会保持一致：
+
+- 用户上传后看到“待管理员审核”
+- 管理员审核通过后，照片才参与终端识别
+- 管理员驳回后，用户可以在冷却期结束后重新上传

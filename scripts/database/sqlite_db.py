@@ -42,6 +42,10 @@ CREATE TABLE IF NOT EXISTS face_profiles (
     user_id INTEGER NOT NULL,
     image_path TEXT NOT NULL,
     encoding TEXT NOT NULL,
+    review_status TEXT NOT NULL DEFAULT 'pending',
+    review_comment TEXT,
+    reviewed_at TEXT,
+    reviewed_by TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
@@ -58,6 +62,7 @@ CREATE TABLE IF NOT EXISTS attendance_records (
 
 CREATE INDEX IF NOT EXISTS idx_roster_members_status ON roster_members(status);
 CREATE INDEX IF NOT EXISTS idx_face_profiles_user_id ON face_profiles(user_id);
+CREATE INDEX IF NOT EXISTS idx_face_profiles_review_status ON face_profiles(review_status);
 CREATE INDEX IF NOT EXISTS idx_attendance_records_user_id ON attendance_records(user_id);
 CREATE INDEX IF NOT EXISTS idx_attendance_records_check_time ON attendance_records(check_time);
 """
@@ -126,6 +131,7 @@ class SQLiteDB:
         )
         connection.execute("CREATE INDEX IF NOT EXISTS idx_roster_members_status ON roster_members(status)")
         self._ensure_app_meta_table(connection)
+        self._ensure_face_profile_review_columns(connection)
         self._migrate_legacy_utc_timestamps(connection)
 
     def _ensure_column(self, connection, table_name: str, column_name: str, alter_sql: str):
@@ -146,6 +152,31 @@ class SQLiteDB:
             )
             """
         )
+
+    def _ensure_face_profile_review_columns(self, connection) -> None:
+        """
+        给历史 face_profiles 表补齐审核字段。
+        旧系统里已经在使用的人脸档案默认回填为 approved，避免升级后现场识别突然全部失效；
+        新上传的人脸档案则由业务层显式写成 pending，进入管理员审核流。
+        """
+
+        if not self.column_exists(connection, "face_profiles", "review_status"):
+            connection.execute("ALTER TABLE face_profiles ADD COLUMN review_status TEXT")
+        if not self.column_exists(connection, "face_profiles", "review_comment"):
+            connection.execute("ALTER TABLE face_profiles ADD COLUMN review_comment TEXT")
+        if not self.column_exists(connection, "face_profiles", "reviewed_at"):
+            connection.execute("ALTER TABLE face_profiles ADD COLUMN reviewed_at TEXT")
+        if not self.column_exists(connection, "face_profiles", "reviewed_by"):
+            connection.execute("ALTER TABLE face_profiles ADD COLUMN reviewed_by TEXT")
+
+        connection.execute(
+            """
+            UPDATE face_profiles
+            SET review_status = 'approved'
+            WHERE review_status IS NULL OR TRIM(review_status) = ''
+            """
+        )
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_face_profiles_review_status ON face_profiles(review_status)")
 
     def _migrate_legacy_utc_timestamps(self, connection) -> None:
         """
@@ -478,7 +509,10 @@ class AttendanceRepository:
                     users.created_at,
                     roster_members.role AS roster_role,
                     roster_members.status AS roster_status,
-                    COUNT(face_profiles.id) AS face_profiles_count
+                    COUNT(face_profiles.id) AS face_profiles_count,
+                    SUM(CASE WHEN face_profiles.review_status = 'approved' THEN 1 ELSE 0 END) AS approved_face_profiles_count,
+                    SUM(CASE WHEN face_profiles.review_status = 'pending' THEN 1 ELSE 0 END) AS pending_face_profiles_count,
+                    SUM(CASE WHEN face_profiles.review_status = 'rejected' THEN 1 ELSE 0 END) AS rejected_face_profiles_count
                 FROM users
                 LEFT JOIN roster_members ON roster_members.id = users.roster_member_id
                 LEFT JOIN face_profiles ON face_profiles.user_id = users.id
@@ -525,7 +559,10 @@ class AttendanceRepository:
                     users.created_at,
                     roster_members.role AS roster_role,
                     roster_members.status AS roster_status,
-                    COUNT(face_profiles.id) AS face_profiles_count
+                    COUNT(face_profiles.id) AS face_profiles_count,
+                    SUM(CASE WHEN face_profiles.review_status = 'approved' THEN 1 ELSE 0 END) AS approved_face_profiles_count,
+                    SUM(CASE WHEN face_profiles.review_status = 'pending' THEN 1 ELSE 0 END) AS pending_face_profiles_count,
+                    SUM(CASE WHEN face_profiles.review_status = 'rejected' THEN 1 ELSE 0 END) AS rejected_face_profiles_count
                 FROM users
                 LEFT JOIN roster_members ON roster_members.id = users.roster_member_id
                 LEFT JOIN face_profiles ON face_profiles.user_id = users.id
@@ -547,10 +584,27 @@ class AttendanceRepository:
             return dict(row) if row else None
 
     def save_face_profile(self, user_id, image_path, encoding):
+        """
+        保存一份新上传的人脸档案。
+        新档案默认进入 pending，只有管理员审核通过后才会参与终端识别。
+        """
+
         now_text = local_now_text()
         with self.db.session() as connection:
             cursor = connection.execute(
-                "INSERT INTO face_profiles (user_id, image_path, encoding, created_at) VALUES (?, ?, ?, ?)",
+                """
+                INSERT INTO face_profiles (
+                    user_id,
+                    image_path,
+                    encoding,
+                    review_status,
+                    review_comment,
+                    reviewed_at,
+                    reviewed_by,
+                    created_at
+                )
+                VALUES (?, ?, ?, 'pending', NULL, NULL, NULL, ?)
+                """,
                 (user_id, image_path, encoding, now_text),
             )
             return cursor.lastrowid
@@ -573,6 +627,10 @@ class AttendanceRepository:
                     users.name,
                     users.code,
                     face_profiles.image_path,
+                    face_profiles.review_status,
+                    face_profiles.review_comment,
+                    face_profiles.reviewed_at,
+                    face_profiles.reviewed_by,
                     face_profiles.created_at
                 FROM face_profiles
                 JOIN users ON users.id = face_profiles.user_id
@@ -583,8 +641,20 @@ class AttendanceRepository:
             ).fetchall()
             return [dict(row) for row in rows]
 
-    def list_face_profiles(self, limit: int = 50, user_id: Optional[int] = None, code: str = ""):
+    def list_face_profiles(
+        self,
+        limit: int = 50,
+        user_id: Optional[int] = None,
+        code: str = "",
+        review_status: str = "",
+    ):
+        """
+        按条件列出人脸档案。
+        Windows 管理端会用这个接口浏览待审核、已通过和已驳回的数据。
+        """
+
         code = (code or "").strip()
+        review_status = (review_status or "").strip().lower()
         with self.db.session() as connection:
             rows = connection.execute(
                 """
@@ -594,16 +664,21 @@ class AttendanceRepository:
                     users.name,
                     users.code,
                     face_profiles.image_path,
+                    face_profiles.review_status,
+                    face_profiles.review_comment,
+                    face_profiles.reviewed_at,
+                    face_profiles.reviewed_by,
                     face_profiles.created_at
                 FROM face_profiles
                 JOIN users ON users.id = face_profiles.user_id
                 WHERE
                     (? IS NULL OR face_profiles.user_id = ?)
                     AND (? = '' OR users.code = ?)
+                    AND (? = '' OR face_profiles.review_status = ?)
                 ORDER BY face_profiles.id DESC
                 LIMIT ?
                 """,
-                (user_id, user_id, code, code, limit),
+                (user_id, user_id, code, code, review_status, review_status, limit),
             ).fetchall()
             return [dict(row) for row in rows]
 
@@ -618,6 +693,10 @@ class AttendanceRepository:
                     users.code,
                     face_profiles.image_path,
                     face_profiles.encoding,
+                    face_profiles.review_status,
+                    face_profiles.review_comment,
+                    face_profiles.reviewed_at,
+                    face_profiles.reviewed_by,
                     face_profiles.created_at
                 FROM face_profiles
                 JOIN users ON users.id = face_profiles.user_id
@@ -626,6 +705,53 @@ class AttendanceRepository:
                 (face_profile_id,),
             ).fetchone()
             return dict(row) if row else None
+
+    def review_face_profile(
+        self,
+        face_profile_id: int,
+        review_status: str,
+        review_comment: str = "",
+        reviewed_by: str = "",
+    ) -> Optional[dict]:
+        """
+        更新人脸档案审核结果。
+        `pending` 表示重新放回待审核；`approved` 和 `rejected` 会记录审核人和审核时间。
+        """
+
+        normalized_status = (review_status or "").strip().lower()
+        if normalized_status not in {"pending", "approved", "rejected"}:
+            raise ValueError("审核状态只允许 pending、approved 或 rejected。")
+
+        cleaned_comment = (review_comment or "").strip()
+        cleaned_reviewer = (reviewed_by or "").strip()
+        reviewed_at = None if normalized_status == "pending" else local_now_text()
+        if normalized_status == "pending":
+            cleaned_comment = ""
+            cleaned_reviewer = ""
+
+        with self.db.session() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE face_profiles
+                SET
+                    review_status = ?,
+                    review_comment = ?,
+                    reviewed_at = ?,
+                    reviewed_by = ?
+                WHERE id = ?
+                """,
+                (
+                    normalized_status,
+                    cleaned_comment or None,
+                    reviewed_at,
+                    cleaned_reviewer or None,
+                    face_profile_id,
+                ),
+            )
+            if cursor.rowcount <= 0:
+                return None
+
+        return self.get_face_profile_by_id(face_profile_id)
 
     def delete_face_profile(self, face_profile_id: int) -> bool:
         with self.db.session() as connection:

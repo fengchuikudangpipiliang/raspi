@@ -62,6 +62,9 @@ def build_admin_api_router(camera, started_at, roster_import_service=None) -> AP
         return path
 
     def serialize_user_summary(user: dict) -> dict:
+        approved_count = int(user.get("approved_face_profiles_count") or 0)
+        pending_count = int(user.get("pending_face_profiles_count") or 0)
+        rejected_count = int(user.get("rejected_face_profiles_count") or 0)
         return {
             "id": user["id"],
             "roster_member_id": user.get("roster_member_id"),
@@ -74,7 +77,10 @@ def build_admin_api_router(camera, started_at, roster_import_service=None) -> AP
             "last_login_at": user.get("last_login_at"),
             "created_at": user.get("created_at"),
             "face_profiles_count": int(user.get("face_profiles_count") or 0),
-            "face_profile_ready": int(user.get("face_profiles_count") or 0) > 0,
+            "approved_face_profiles_count": approved_count,
+            "pending_face_profiles_count": pending_count,
+            "rejected_face_profiles_count": rejected_count,
+            "face_profile_ready": approved_count > 0,
         }
 
     def build_registered_codes() -> set[str]:
@@ -102,12 +108,18 @@ def build_admin_api_router(camera, started_at, roster_import_service=None) -> AP
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     def serialize_face_profile(face_profile: dict) -> dict:
+        review_status = (face_profile.get("review_status") or "pending").strip().lower()
         return {
             "id": face_profile["id"],
             "user_id": face_profile["user_id"],
             "name": face_profile["name"],
             "code": face_profile["code"],
             "image_path": face_profile["image_path"],
+            "review_status": review_status,
+            "review_comment": face_profile.get("review_comment"),
+            "reviewed_at": face_profile.get("reviewed_at"),
+            "reviewed_by": face_profile.get("reviewed_by"),
+            "recognition_enabled": review_status == "approved",
             "created_at": face_profile["created_at"],
             "image_url": f"/api/admin/face-profiles/{face_profile['id']}/image",
         }
@@ -332,11 +344,46 @@ def build_admin_api_router(camera, started_at, roster_import_service=None) -> AP
         }
 
     @router.get("/face-profiles")
-    def get_face_profiles(request: Request, limit: int = 100, user_id: Optional[int] = None, code: str = ""):
+    def get_face_profiles(
+        request: Request,
+        limit: int = 100,
+        user_id: Optional[int] = None,
+        code: str = "",
+        review_status: str = "",
+    ):
+        """
+        列出人脸档案。
+        Windows 管理端可以按审核状态筛待审核列表，再逐条进入图片预览和审核操作。
+        """
+
         require_admin_token(request)
         safe_limit = min(max(int(limit), 1), 200)
-        items = [serialize_face_profile(item) for item in repo.list_face_profiles(limit=safe_limit, user_id=user_id, code=code)]
+        normalized_review_status = (review_status or "").strip().lower()
+        if normalized_review_status and normalized_review_status not in {"pending", "approved", "rejected"}:
+            raise HTTPException(status_code=400, detail="review_status 只允许 pending、approved 或 rejected。")
+        items = [
+            serialize_face_profile(item)
+            for item in repo.list_face_profiles(
+                limit=safe_limit,
+                user_id=user_id,
+                code=code,
+                review_status=normalized_review_status,
+            )
+        ]
         return {"ok": True, "items": items, "total": len(items)}
+
+    @router.get("/face-profiles/{face_profile_id}")
+    def get_face_profile_detail(request: Request, face_profile_id: int):
+        """
+        获取单条人脸档案详情。
+        这里返回审核状态和审核备注，方便 Windows 管理端在详情抽屉或弹窗里直接展示。
+        """
+
+        require_admin_token(request)
+        face_profile = repo.get_face_profile_by_id(face_profile_id)
+        if not face_profile:
+            raise HTTPException(status_code=404, detail="人脸档案不存在。")
+        return {"ok": True, "data": serialize_face_profile(face_profile)}
 
     @router.get("/face-profiles/{face_profile_id}/image")
     def get_face_profile_image(request: Request, face_profile_id: int):
@@ -346,6 +393,40 @@ def build_admin_api_router(camera, started_at, roster_import_service=None) -> AP
             raise HTTPException(status_code=404, detail="人脸档案不存在。")
         file_path = resolve_local_file(face_profile["image_path"])
         return FileResponse(file_path)
+
+    @router.post("/face-profiles/{face_profile_id}/review")
+    async def review_face_profile(request: Request, face_profile_id: int):
+        """
+        审核指定人脸档案。
+        管理员把 `review_status` 改成 approved 或 rejected 后，树莓派终端的正式识别名单会随下一次重载同步生效。
+        """
+
+        require_admin_token(request)
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="提交数据格式错误。")
+
+        review_status = (payload.get("review_status", "") or "").strip().lower()
+        review_comment = (payload.get("review_comment", "") or "").strip()
+        reviewed_by = (payload.get("reviewed_by", "") or "").strip()
+
+        try:
+            face_profile = repo.review_face_profile(
+                face_profile_id=face_profile_id,
+                review_status=review_status,
+                review_comment=review_comment,
+                reviewed_by=reviewed_by,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+        if not face_profile:
+            raise HTTPException(status_code=404, detail="人脸档案不存在。")
+
+        return {
+            "ok": True,
+            "data": serialize_face_profile(face_profile),
+        }
 
     @router.delete("/face-profiles/{face_profile_id}")
     def delete_face_profile(request: Request, face_profile_id: int):

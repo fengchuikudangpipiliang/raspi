@@ -5,38 +5,48 @@
 {% block content %}
 <main class="portal-shell">
     <div class="container py-4 py-lg-5">
-        <section class="portal-hero mb-4">
-            <div>
+        <section class="portal-auth-grid">
+            <section class="portal-card portal-auth-intro">
+                <span class="portal-kicker">账号入口</span>
                 <h1 class="display-6 fw-bold mb-2">用户登录</h1>
-            </div>
-            <div class="portal-actions">
-                <a class="btn btn-warning btn-soft" href="{{ url_for('portal_register_page') }}">首次注册</a>
-            </div>
-        </section>
+                <p class="hero-copy mb-0">输入学号或工号与密码后进入个人中心。</p>
+                <div class="portal-auth-points mt-4">
+                    <div class="portal-auth-point">
+                        <strong>首次注册</strong>
+                        <span>先完成账号注册，再上传人脸资料。</span>
+                    </div>
+                    <div class="portal-auth-point">
+                        <strong>资料中心</strong>
+                        <span>登录后查看状态、查看照片或重新上传。</span>
+                    </div>
+                </div>
+            </section>
 
-        <section class="portal-card">
-            <div class="panel-head">
-                <div>
-                    <h2>登录账号</h2>
-                </div>
-            </div>
-            <form class="portal-form" id="login-form">
-                <div class="row g-3">
-                    <div class="col-12">
-                        <label class="form-label" for="code">学号/工号</label>
-                        <input class="form-control portal-input" id="code" name="code" maxlength="40" required>
+            <section class="portal-card portal-auth-card">
+                <div class="panel-head">
+                    <div>
+                        <h2>登录账号</h2>
                     </div>
-                    <div class="col-12">
-                        <label class="form-label" for="password">密码</label>
-                        <input class="form-control portal-input" id="password" name="password" type="password" maxlength="64" required>
+                    <a class="btn btn-outline-light btn-soft" href="{{ url_for('portal_register_page') }}">首次注册</a>
+                </div>
+                <form class="portal-form" id="login-form">
+                    <div class="row g-3">
+                        <div class="col-12">
+                            <label class="form-label" for="code">学号/工号</label>
+                            <input class="form-control portal-input" id="code" name="code" maxlength="40" required>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label" for="password">密码</label>
+                            <input class="form-control portal-input" id="password" name="password" type="password" maxlength="64" required>
+                        </div>
                     </div>
-                </div>
-                <div class="portal-alert mt-3 d-none" id="login-alert"></div>
-                <div class="d-flex flex-wrap gap-3 mt-4">
-                    <button class="btn btn-warning btn-soft" id="login-submit" type="submit">登录</button>
-                    <a class="btn btn-outline-light btn-soft" href="{{ url_for('portal_register_page') }}">去注册</a>
-                </div>
-            </form>
+                    <div class="portal-alert mt-3 d-none" id="login-alert"></div>
+                    <div class="d-flex flex-wrap gap-3 mt-4">
+                        <button class="btn btn-warning btn-soft" id="login-submit" type="submit">登录</button>
+                        <a class="btn btn-outline-light btn-soft" href="{{ url_for('portal_register_page') }}">去注册</a>
+                    </div>
+                </form>
+            </section>
         </section>
     </div>
 </main>

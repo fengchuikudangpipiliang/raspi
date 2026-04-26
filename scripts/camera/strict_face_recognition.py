@@ -187,6 +187,7 @@ class StrictFaceRecognizer:
                 WHERE
                     users.password_hash IS NOT NULL
                     AND IFNULL(roster_members.status, 'active') = 'active'
+                    AND face_profiles.review_status = 'approved'
                 ORDER BY face_profiles.id ASC
                 """
             ).fetchall()

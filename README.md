@@ -288,6 +288,8 @@ to do:
 - 页面里原先偏测试、偏说明性的长文案已压缩，只保留必要状态与操作信息
 - 用户中心里的“已上传人脸档案”独立列表已移除，相关功能已合并进账号概览
 - 成功上传人脸资料后会进入重新上传冷却期，当前通过 `portal_face_reupload_cooldown_seconds` 控制，测试值为 300 秒
+- 登录页、注册页、用户中心页、人脸资料页已经继续收口为更接近成品页的布局，不再保留开发期眉标和大段解释性文字
+- 人脸资料页会根据当前账号状态展示重新上传是否可用；冷却期内即使手工进入页面，也会看到锁定提示并禁止重新提交
 
 ### 4. 外网用户门户与名单注册流
 
@@ -1571,3 +1573,160 @@ Windows 侧管理员项目不需要启动这个仓库里的额外服务，它只
 - 自动写入真实考勤记录
 
 下一阶段的重点，是把 Windows 管理项目、树莓派终端实时反馈和后台运维能力继续做完整。
+
+## 十三、2026-04-26 人脸审核流补充
+
+这一轮补的是“用户上传 -> 管理员审核 -> 审核通过后才参与终端识别”这条链路。
+
+### 1. 当前流程约定
+
+现在用户门户上传人脸照片后，系统行为改成：
+
+`用户上传照片 -> 质量校验通过 -> 保存 face_profiles -> 状态记为 pending -> 管理员审核 -> approved / rejected`
+
+其中：
+
+- 新上传的人脸档案默认进入 `pending`
+- 审核通过后变成 `approved`
+- 审核不通过后变成 `rejected`
+- 树莓派终端严格识别器只会加载 `approved` 的人脸档案
+
+这意味着：
+
+- 用户上传成功，不代表立刻能在终端识别
+- 只有管理员审核通过后，这张照片才会被终端识别人脸库加载
+- 历史版本已经存在的人脸档案，在数据库升级时会自动回填为 `approved`，避免升级后现场识别全部失效
+
+### 2. 数据库结构补充
+
+`face_profiles` 表新增了 4 个审核字段：
+
+- `review_status`
+- `review_comment`
+- `reviewed_at`
+- `reviewed_by`
+
+用途分别是：
+
+- `review_status`：当前审核状态
+- `review_comment`：管理员审核备注
+- `reviewed_at`：审核完成时间
+- `reviewed_by`：审核操作人标识
+
+相关实现文件：
+
+- [scripts/database/sqlite_db.py](/home/luck/face3/scripts/database/sqlite_db.py)
+
+### 3. 用户门户页面补充
+
+当前对外用户页面已经补上审核状态展示。
+
+#### 用户中心 `/portal/home`
+
+现在会展示：
+
+- 最近上传状态
+- 是否已经生效到终端识别
+- 最近上传时间
+- 审核备注
+- 审核时间
+
+按钮逻辑现在是：
+
+- 从未上传：显示“上传人脸照片”
+- 已上传：显示“查看照片”
+- 冷却结束后：允许“重新上传人脸照片”
+- 冷却未结束：按钮禁用，并显示剩余等待提示
+
+#### 人脸资料页 `/portal/face`
+
+现在会展示：
+
+- 当前审核状态
+- 最近上传时间
+- 审核备注
+- 重新上传冷却提示
+
+上传成功后的返回文案也已经改成：
+
+- “人脸资料已提交，等待管理员审核。审核通过后才会用于终端识别。”
+
+相关实现文件：
+
+- [templates/portal_home.html](/home/luck/face3/templates/portal_home.html)
+- [scripts/web/templates/funnel_test.html](/home/luck/face3/scripts/web/templates/funnel_test.html)
+- [scripts/web/portal_submission_service.py](/home/luck/face3/scripts/web/portal_submission_service.py)
+
+### 4. 终端识别规则补充
+
+树莓派终端的人脸识别加载逻辑已经改成只读取：
+
+- `review_status = approved`
+
+也就是说：
+
+- `pending` 不参与终端识别
+- `rejected` 不参与终端识别
+- 只有 `approved` 会进入终端识别人脸库
+
+相关实现文件：
+
+- [scripts/camera/strict_face_recognition.py](/home/luck/face3/scripts/camera/strict_face_recognition.py)
+- [scripts/camera/camera.py](/home/luck/face3/scripts/camera/camera.py)
+
+说明：
+
+- 终端识别人脸库当前默认每 `60` 秒自动热重载一次
+- 所以管理员审核通过后，通常不需要手工重启服务
+
+### 5. Windows 管理端 API 补充
+
+设备侧管理员 API 现在已经补上了人脸审核相关能力。
+
+新增/增强的能力包括：
+
+- `GET /api/admin/face-profiles`
+  - 支持 `review_status` 过滤
+- `GET /api/admin/face-profiles/{face_profile_id}`
+  - 获取单条人脸档案详情
+- `POST /api/admin/face-profiles/{face_profile_id}/review`
+  - 提交审核结果
+
+人脸档案返回字段新增：
+
+- `review_status`
+- `review_comment`
+- `reviewed_at`
+- `reviewed_by`
+- `recognition_enabled`
+
+相关实现文件：
+
+- [scripts/admin_api.py](/home/luck/face3/scripts/admin_api.py)
+- [docs/raspberry_pi_admin_api.md](/home/luck/face3/docs/raspberry_pi_admin_api.md)
+
+Windows 端现在最少应接住这几个场景：
+
+1. 拉取待审核列表
+2. 查看照片原图
+3. 填写通过或驳回结果
+4. 展示审核备注、审核时间、审核人
+
+### 6. 当前重新上传策略
+
+重新上传冷却仍然保留，并且已经写入配置：
+
+- `portal_face_reupload_cooldown_seconds`
+
+当前测试值仍然是：
+
+- `300` 秒，也就是 `5` 分钟
+
+对应文件：
+
+- [env.json](/home/luck/face3/env.json)
+- [scripts/config/config.py](/home/luck/face3/scripts/config/config.py)
+
+后续正式上线时，这个值可以改回：
+
+- `86400` 秒，也就是 `24` 小时

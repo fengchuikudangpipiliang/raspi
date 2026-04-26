@@ -5,9 +5,14 @@
 {% block content %}
 <main class="portal-shell">
     <div class="container py-4 py-lg-5">
-        <section class="portal-hero mb-4">
-            <div>
-                <h1 class="display-6 fw-bold mb-2">欢迎，{{ user.name }}</h1>
+        <section class="portal-topbar mb-4">
+            <div class="portal-topbar-main">
+                <div class="portal-topbar-title">
+                    <h1 class="display-6 fw-bold mb-1">欢迎，{{ user.name }}</h1>
+                </div>
+                <div class="portal-topbar-meta">
+                    <span class="portal-kicker">{{ user.code }}</span>
+                </div>
             </div>
             <div class="portal-actions">
                 <button class="btn btn-warning btn-soft" id="logout-button" type="button">退出登录</button>
@@ -39,24 +44,45 @@
                         <strong>{{ user.roster_role or "member" }}</strong>
                     </div>
                 </div>
+                <div class="col-md-4">
+                    <div class="portal-stat-card">
+                        <span>最近状态</span>
+                        <strong>{{ user.latest_face_review_status_label if user.face_profile_ready else "未上传" }}</strong>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="portal-stat-card">
+                        <span>识别可用</span>
+                        <strong>{% if user.face_profile_recognition_ready %}已生效{% else %}未生效{% endif %}</strong>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="portal-stat-card">
+                        <span>最近上传</span>
+                        <strong>{% if user.latest_face_profile %}{{ user.latest_face_profile.created_at }}{% else %}暂无{% endif %}</strong>
+                    </div>
+                </div>
             </div>
 
             <div class="portal-status-block mt-4">
-                <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-3">
+                <div class="d-flex flex-column gap-3">
                     <div>
-                        <div class="status-pill {% if user.face_profile_ready %}ok{% else %}warning{% endif %}">
-                            {% if user.face_profile_ready %}已上传人脸资料{% else %}待上传人脸资料{% endif %}
+                        <div class="status-pill {% if not user.face_profile_ready %}warning{% else %}{{ user.latest_face_review_status_tone }}{% endif %}">
+                            {% if user.face_profile_ready %}{{ user.latest_face_review_status_label }}{% else %}待上传人脸资料{% endif %}
                         </div>
-                        <p class="mb-0 mt-3">当前已保存 {{ user.face_profiles_count }} 份人脸档案。</p>
-                        {% if user.latest_face_profile %}
-                        <p class="mb-0 mt-2 portal-status-copy">最近上传：{{ user.latest_face_profile.created_at }}</p>
+                        <p class="mb-0 mt-2 portal-status-copy">{{ user.face_review_hint }}</p>
+                        {% if user.latest_face_review_comment %}
+                        <p class="mb-0 mt-2 portal-status-copy">审核备注：{{ user.latest_face_review_comment }}</p>
+                        {% endif %}
+                        {% if user.face_profile_ready and user.latest_face_reviewed_at %}
+                        <p class="mb-0 mt-2 portal-status-copy">审核时间：{{ user.latest_face_reviewed_at }}</p>
                         {% endif %}
                         {% if user.face_profile_ready and not user.face_reupload_allowed %}
                         <p class="mb-0 mt-2 portal-status-copy">{{ user.face_reupload_message }}</p>
                         {% endif %}
                     </div>
 
-                    <div class="d-flex flex-wrap gap-3">
+                    <div class="portal-action-strip">
                         {% if not user.face_profile_ready %}
                         <a class="btn btn-outline-light btn-soft" href="{{ url_for('portal_face_page') }}">上传人脸照片</a>
                         {% else %}

@@ -125,7 +125,7 @@
     const videoFeedUrl = new URL(videoFeedPath, window.location.href).toString();
     const healthzUrl = new URL(healthzPath, window.location.href).toString();
     const backendCheckIntervalMs = 10_000;
-    const terminalStatusIntervalMs = 10_000;
+    const terminalStatusIntervalMs = 800;
     const backendCheckTimeoutMs = 5_000;
 
     let backendOnline = true;

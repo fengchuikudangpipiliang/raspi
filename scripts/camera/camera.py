@@ -245,11 +245,28 @@ class VideoCamera:
         统一做尺寸、镜像和旋转处理。
         """
 
-        resized = cv2.resize(frame, (cfg.camera_width, cfg.camera_height))
+        resized = self._resize_for_display(frame)
         if self.recognizer is not None:
             return self.recognizer.prepare_frame(resized)
 
         return self._normalize_frame_fallback(resized)
+
+    def _resize_for_display(self, frame):
+        """
+        按配置限制输出尺寸，但不把低分辨率摄像头画面强行放大。
+        这样既能利用支持 720p 的摄像头，也避免不支持高分辨率的设备被软件插值放糊。
+        """
+
+        target_width = max(int(cfg.camera_width), 1)
+        target_height = max(int(cfg.camera_height), 1)
+        height, width = frame.shape[:2]
+        if width <= target_width and height <= target_height:
+            return frame
+
+        scale = min(target_width / max(width, 1), target_height / max(height, 1))
+        new_width = max(int(width * scale), 1)
+        new_height = max(int(height * scale), 1)
+        return cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
 
     def _render_frame(self, normalized_frame):
         """
@@ -421,6 +438,8 @@ class VideoCamera:
 
         if time.time() > self.success_overlay_until or not self.success_overlay_text:
             return
+        if self.recognition_result is not None and self.recognition_result.reason == "no_face":
+            return
 
         panel_height = 72
         panel_top = max(frame.shape[0] - panel_height - 18, 12)
@@ -541,6 +560,15 @@ class VideoCamera:
         """
 
         now = time.time()
+        result = self.recognition_result
+
+        if result is not None and result.reason == "no_face":
+            return {
+                "label": "等待人脸",
+                "detail": "请进入画面中央",
+                "percent": 10,
+            }
+
         if now <= self.success_overlay_until and self.success_overlay_text:
             return {
                 "label": "已签到",
@@ -561,7 +589,6 @@ class VideoCamera:
                 "percent": 0,
             }
 
-        result = self.recognition_result
         if result is None:
             return {
                 "label": "等待人脸",

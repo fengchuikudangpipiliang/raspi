@@ -144,7 +144,16 @@ def build_admin_api_router(camera, started_at, roster_import_service=None) -> AP
             "created_at": item.get("created_at"),
         }
 
+    def attendance_snapshot_exists(record: dict) -> bool:
+        if not record.get("snapshot_path"):
+            return False
+        try:
+            return resolve_local_file(record["snapshot_path"]).is_file()
+        except HTTPException:
+            return False
+
     def serialize_attendance_record(record: dict) -> dict:
+        snapshot_available = attendance_snapshot_exists(record)
         return {
             "id": record["id"],
             "user_id": record["user_id"],
@@ -153,7 +162,8 @@ def build_admin_api_router(camera, started_at, roster_import_service=None) -> AP
             "check_type": record["check_type"],
             "check_time": record["check_time"],
             "snapshot_path": record["snapshot_path"],
-            "snapshot_url": f"/api/admin/attendance/{record['id']}/snapshot" if record.get("snapshot_path") else None,
+            "snapshot_available": snapshot_available,
+            "snapshot_url": f"/api/admin/attendance/{record['id']}/snapshot" if snapshot_available else None,
             "confidence": record["confidence"],
         }
 

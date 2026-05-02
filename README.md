@@ -796,10 +796,9 @@ sudo tailscale funnel 8010
 同时新增了一块左上角小进度提示：
 
 - 通过 `/api/terminal/status` 获取轻量状态
-- 默认约每 0.8 秒刷新一次，接口只返回轻量 JSON，不参与视频编码和识别计算
+- 默认每 10 秒刷新一次，避免终端页产生过高频率轮询日志
 - 只显示很短的标签、说明和一条细进度条
 - 目的是让终端前的人知道“系统是否正在识别”，但不遮挡画面主体
-- 如果人脸已经离开画面，会优先切回“等待人脸”，不再让“已签到”长时间停留
 
 9. 摄像头连续读帧失败时会主动自恢复
 
@@ -827,15 +826,6 @@ sudo tailscale funnel 8010
 
 - 控制视频流 JPEG 质量
 - 可以在“图像清晰度”和“推流带宽/编码开销”之间做平衡
-
-当前现场测试值已经调整为：
-
-- `camera_width = 1280`
-- `camera_height = 720`
-- `camera_fps = 15`
-- `camera_jpeg_quality = 84`
-
-同时摄像头线程现在不会把低于目标分辨率的原始画面强行软件放大，避免“设备实际只给低清帧，但后端又插值放大一次”导致画面更糊。
 
 11. 严格识别目标频率做成了配置项
 
@@ -2180,3 +2170,54 @@ uv run --no-project --python .venv-omz/bin/python omz_converter --name anti-spoo
 更完整的对接说明见：
 
 - [docs/raspberry_pi_admin_api.md](/home/luck/face3/docs/raspberry_pi_admin_api.md)
+
+## 十八、2026-05-02 终端画面与快照保留增量
+
+这一节记录 2026-05-02 之后新增的改动，前面的历史章节不再回填修改。
+
+### 1. 终端画面清晰度调整
+
+当前现场测试值已经调整为：
+
+- `camera_width = 1280`
+- `camera_height = 720`
+- `camera_fps = 15`
+- `camera_jpeg_quality = 84`
+
+同时摄像头线程不会把低于目标分辨率的原始画面强行软件放大。这样如果摄像头实际只给低清帧，系统不会再额外插值放大一次，避免画面更糊。
+
+### 2. 终端状态框刷新调整
+
+`/api/terminal/status` 前端刷新间隔从 `10s` 调整为约 `0.8s`。
+
+这个接口只返回轻量 JSON，不参与视频编码、人脸识别和 OpenVINO 推理。调整目的只是让左上角状态框在人脸离开后更快回到“等待人脸”，避免“已签到”停留太久。
+
+### 3. 签到快照只保留最近 7 天
+
+新增配置项：
+
+- `attendance_snapshot_retention_days`
+
+当前值：
+
+- `attendance_snapshot_retention_days = 7`
+
+说明：
+
+- 签到成功时仍会保存现场快照，便于短期复核和异常排查
+- 清理只删除 `data/snapshots/YYYYMMDD/` 下超过保留期的图片文件
+- 不删除 `attendance_records` 考勤流水，所以历史统计不受影响
+- 清理最多一天触发一次，放在签到成功后顺手执行
+
+### 4. Windows 管理端需要补的快照字段
+
+考勤记录返回中新增：
+
+- `snapshot_available`
+
+行为：
+
+- `snapshot_available = true`：快照文件仍在，`snapshot_url` 返回图片接口路径
+- `snapshot_available = false`：快照已过期清理或不存在，`snapshot_url = null`
+
+Windows 管理端应使用 `snapshot_available` 控制“查看快照”按钮是否可用，不要只看 `snapshot_path`。

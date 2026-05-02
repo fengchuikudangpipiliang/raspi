@@ -44,6 +44,7 @@ DEFAULT_CONFIG = {
     "portal_face_reupload_cooldown_seconds": 300,
     "portal_face_rejection_history_limit": 3,
     "snapshots_dir": "data/snapshots",
+    "attendance_snapshot_retention_days": 7,
     "logs_dir": "logs",
     "attendance_cooldown_seconds": 60,
     "attendance_liveness_enabled": False,

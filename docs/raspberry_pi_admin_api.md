@@ -2411,3 +2411,86 @@ GET /?error=树莓派接口调用失败，HTTP 502
 1. Windows 管理端保存的 Bearer Token 是否和树莓派当前 `env.json` 完全一致
 2. Windows 管理端请求的端口是否仍然是 `5000`
 3. Windows 管理端拼接的路径是否带了 `/api/admin/`
+
+#### 15.22 2026-05-02 考勤快照保留策略增量
+
+这一节记录 2026-05-02 新增的快照保留策略。前面的历史接口说明保持原口径，不再回填修改。
+
+##### 15.22.1 树莓派侧做了什么
+
+新增配置项：
+
+- `attendance_snapshot_retention_days`
+
+当前值：
+
+- `7`
+
+行为：
+
+- 签到成功时仍会保存现场快照
+- 系统只保留最近 7 天的快照图片
+- 清理目标是 `data/snapshots/YYYYMMDD/` 下超过保留期的日期目录
+- 只删除本地图片文件，不删除 `attendance_records`
+- 历史考勤流水、统计、筛选仍然保留
+- 清理最多一天触发一次，放在签到成功后执行，不参与实时识别循环
+
+##### 15.22.2 Windows 可见 API 增量
+
+`GET /api/admin/attendance` 的单条记录新增字段：
+
+- `snapshot_available`
+
+同时 `snapshot_url` 的含义调整为：
+
+- 快照文件存在时，返回 `/api/admin/attendance/{attendance_id}/snapshot`
+- 快照不存在或已过期清理时，返回 `null`
+
+示例：
+
+```json
+{
+  "id": 11,
+  "user_id": 2,
+  "name": "张三",
+  "code": "S2026001",
+  "check_type": "check_in",
+  "check_time": "2026-05-02 08:01:25",
+  "snapshot_path": "data/snapshots/20260502/xxx.jpg",
+  "snapshot_available": true,
+  "snapshot_url": "/api/admin/attendance/11/snapshot",
+  "confidence": 0.91
+}
+```
+
+快照过期后的示例：
+
+```json
+{
+  "id": 3,
+  "user_id": 2,
+  "name": "张三",
+  "code": "S2026001",
+  "check_type": "check_in",
+  "check_time": "2026-04-20 08:01:25",
+  "snapshot_path": "data/snapshots/20260420/xxx.jpg",
+  "snapshot_available": false,
+  "snapshot_url": null,
+  "confidence": 0.91
+}
+```
+
+##### 15.22.3 Windows 管理端需要怎么改
+
+考勤列表和详情页不要只用 `snapshot_path` 判断是否可以查看快照。
+
+请改成：
+
+- `snapshot_available = true`：显示或启用“查看快照”
+- `snapshot_available = false`：隐藏或禁用“查看快照”
+
+如果 Windows 端仍然请求已经过期的快照接口：
+
+- `GET /api/admin/attendance/{attendance_id}/snapshot`
+
+树莓派会返回 `404`。这不是接口故障，而是快照已经按 7 天保留策略清理。

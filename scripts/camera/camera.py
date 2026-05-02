@@ -1,7 +1,9 @@
 import threading
 import time
 from math import ceil
+from datetime import date
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -50,6 +52,8 @@ class VideoCamera:
         self.repo = AttendanceRepository()
         self.snapshots_dir = Path(cfg.snapshots_dir)
         self.snapshots_dir.mkdir(parents=True, exist_ok=True)
+        self.snapshot_retention_days = max(int(cfg.attendance_snapshot_retention_days), 1)
+        self.next_snapshot_cleanup_at = 0.0
 
         self.recognizer = None
         self.recognition_result: Optional[RecognitionResult] = None
@@ -396,6 +400,7 @@ class VideoCamera:
             self.last_attendance_message = f"签到成功: {result.name}/{result.code}"
             self.success_overlay_text = f"{result.name} {result.code} 签到成功"
             self.success_overlay_until = time.time() + 4.0
+            self._cleanup_expired_snapshots()
             self._set_policy_feedback(
                 code="attendance_recorded",
                 label="已签到",
@@ -430,6 +435,38 @@ class VideoCamera:
             return str(file_path.relative_to(Path.cwd()))
         except ValueError:
             return str(file_path)
+
+    def _cleanup_expired_snapshots(self):
+        """
+        清理超过保留期的签到现场快照。
+        这里只删除本地图片目录，不删除数据库考勤流水，避免影响历史统计。
+        """
+
+        now = time.time()
+        if now < self.next_snapshot_cleanup_at:
+            return
+
+        self.next_snapshot_cleanup_at = now + 24 * 60 * 60
+        cutoff_date = date.today() - timedelta(days=self.snapshot_retention_days - 1)
+        try:
+            for child in self.snapshots_dir.iterdir():
+                if not child.is_dir():
+                    continue
+                try:
+                    folder_date = datetime.strptime(child.name, "%Y%m%d").date()
+                except ValueError:
+                    continue
+                if folder_date >= cutoff_date:
+                    continue
+                for file_path in child.iterdir():
+                    if file_path.is_file():
+                        file_path.unlink()
+                try:
+                    child.rmdir()
+                except OSError:
+                    pass
+        except Exception as error:
+            self.last_error = f"snapshot_cleanup_failed: {error}"
 
     def _draw_success_overlay(self, frame):
         """

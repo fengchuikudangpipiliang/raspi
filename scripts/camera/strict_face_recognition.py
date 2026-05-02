@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import time
+import warnings
 from dataclasses import asdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -10,7 +11,17 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from scripts.camera.anti_spoof_service import AntiSpoofService
 from scripts.config.config import cfg
+
+# `face_recognition_models` 仍然依赖 `pkg_resources`，在兼容版 setuptools 下会抛出
+# 一条已知 deprecation warning。这里统一静默处理，避免树莓派终端启动日志被无关噪音刷屏。
+warnings.filterwarnings(
+    "ignore",
+    message="pkg_resources is deprecated as an API.*",
+    category=UserWarning,
+    module="face_recognition_models",
+)
 
 try:
     import face_recognition
@@ -64,6 +75,11 @@ class RecognitionResult:
     cooldown_remaining_seconds: float = 0.0
     in_attendance_window: bool = True
     face_area_ratio: Optional[float] = None
+    liveness_checked: bool = False
+    liveness_passed: bool = False
+    liveness_gray_zone: bool = False
+    liveness_real_score: Optional[float] = None
+    liveness_spoof_score: Optional[float] = None
     blur_score: Optional[float] = None
     brightness_score: Optional[float] = None
     pose: Optional[PoseSummary] = None
@@ -85,6 +101,12 @@ REASON_DISPLAY = {
     "multi_face": "检测到多张人脸，请保持单人入镜",
     "face_detection_failed": "人脸检测失败",
     "face_too_small": "人脸过小，请靠近摄像头",
+    "liveness_disabled": "活体检测未启用",
+    "liveness_model_unavailable": "活体模型暂不可用，当前按普通识别继续",
+    "liveness_face_crop_failed": "活体检测失败，请重新正对镜头",
+    "liveness_uncertain": "活体结果不够稳定，请正对镜头后重试",
+    "spoof_suspected": "疑似照片或翻拍，请真人到场签到",
+    "liveness_passed": "活体检测通过",
     "image_blurry": "画面偏模糊，请保持稳定",
     "bad_lighting": "光线不合适，请调整亮度",
     "landmarks_missing": "关键点提取失败，请正视镜头",
@@ -153,6 +175,7 @@ class StrictFaceRecognizer:
         self.ambiguity_margin = float(ambiguity_margin)
         self.stable_timeout_seconds = float(stable_timeout_seconds)
         self.attendance_cooldown_seconds = int(attendance_cooldown_seconds or cfg.attendance_cooldown_seconds)
+        self.liveness_service = AntiSpoofService()
 
         self.known_profiles: list[KnownFaceProfile] = []
         self.known_encodings: list[np.ndarray] = []
@@ -306,6 +329,19 @@ class StrictFaceRecognizer:
         result.face_area_ratio = self._calculate_face_area_ratio(location, width, height)
         if result.face_area_ratio < self.min_face_area_ratio:
             result.reason = "face_too_small"
+            self._reset_on_failed_frame()
+            self._last_result = result
+            return result
+
+        face_roi = self._extract_face_roi(frame_bgr, location)
+        liveness_result = self.liveness_service.analyze_face(face_roi)
+        result.liveness_checked = liveness_result.checked
+        result.liveness_passed = liveness_result.passed
+        result.liveness_gray_zone = liveness_result.gray_zone
+        result.liveness_real_score = liveness_result.real_score
+        result.liveness_spoof_score = liveness_result.spoof_score
+        if liveness_result.checked and not liveness_result.passed:
+            result.reason = liveness_result.reason
             self._reset_on_failed_frame()
             self._last_result = result
             return result

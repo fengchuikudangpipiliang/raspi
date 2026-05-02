@@ -587,6 +587,24 @@ class VideoCamera:
                 "detail": "脸部再靠近镜头一些",
                 "percent": 25,
             }
+        if result.reason == "spoof_suspected":
+            return {
+                "label": "疑似假脸",
+                "detail": "请真人正对镜头签到",
+                "percent": 15,
+            }
+        if result.reason == "liveness_uncertain":
+            return {
+                "label": "活体重试",
+                "detail": "请保持正脸并稍微稳定一下",
+                "percent": 30,
+            }
+        if result.reason == "liveness_face_crop_failed":
+            return {
+                "label": "重新对准",
+                "detail": "请把脸完整放入画面中央",
+                "percent": 25,
+            }
         if result.reason == "face_encoding_failed":
             return {
                 "label": "重新对准",

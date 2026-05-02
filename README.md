@@ -1983,3 +1983,185 @@ uv run --no-project --python .venv-omz/bin/python omz_converter --name anti-spoo
 - 如果去安装 `requirements-pytorch.in`，在当前项目目录下还可能把项目自己的 `dlib` 依赖一起卷进来，导致树莓派本地编译非常耗时
 - `uv run` 在项目目录里默认会先同步当前项目环境；如果只是执行下载脚本，不希望把 `face3` 自己的 `dlib` 等依赖一起带上，必须加 `--no-project`
 - 这里单独使用 `.venv-omz` 作为模型工具环境，避免影响主项目 `.venv`
+
+## 十六、2026-04-26 考勤活体检测第一版已接入
+
+这次已经把第一版“被动活体前置”真正接到每天考勤的终端识别主链路里了。
+
+### 1. 当前实际执行顺序
+
+终端实时识别链路现在变成：
+
+`检测单人脸 -> 裁剪人脸区域 -> anti-spoof-mn3 被动活体 -> 活体通过后才做人脸编码识别 -> 稳定帧 -> 写入考勤`
+
+也就是说：
+
+- 如果模型判断疑似照片、翻拍或假脸，就不会继续进入人脸识别
+- 如果活体分数处于灰区，当前第一版会先拒绝并提示重新正对镜头
+- 后续第二版再把“灰区触发主动转头挑战”补进去
+
+### 2. 当前新增的代码位置
+
+新增文件：
+
+- [scripts/camera/anti_spoof_service.py](/home/luck/face3/scripts/camera/anti_spoof_service.py)
+
+已接入文件：
+
+- [scripts/camera/strict_face_recognition.py](/home/luck/face3/scripts/camera/strict_face_recognition.py)
+- [scripts/camera/camera.py](/home/luck/face3/scripts/camera/camera.py)
+
+作用分别是：
+
+- `anti_spoof_service.py`：加载 OpenVINO IR 模型并返回 `real/spoof` 分数
+- `strict_face_recognition.py`：在做人脸编码前先执行被动活体门禁
+- `camera.py`：把新的活体失败状态转成终端页进度提示文案
+
+### 3. 当前新增配置项
+
+已经加入配置系统：
+
+- `attendance_liveness_enabled`
+- `attendance_liveness_model_path`
+- `attendance_liveness_device`
+- `attendance_liveness_real_threshold`
+- `attendance_liveness_gray_threshold`
+
+当前 `env.json` 测试值是：
+
+- `attendance_liveness_enabled = true`
+- `attendance_liveness_model_path = third_party/openvino_models_ir/public/anti-spoof-mn3/FP32/anti-spoof-mn3.xml`
+- `attendance_liveness_device = CPU`
+- `attendance_liveness_real_threshold = 0.85`
+- `attendance_liveness_gray_threshold = 0.65`
+
+相关文件：
+
+- [env.json](/home/luck/face3/env.json)
+- [scripts/config/config.py](/home/luck/face3/scripts/config/config.py)
+
+### 4. 当前第一版行为说明
+
+第一版先做的是最稳妥的被动活体前置，不在这次里硬接主动挑战状态机。
+
+当前规则：
+
+- `real_score >= 0.85`：放行进入识别
+- `0.65 <= real_score < 0.85`：判定灰区，提示用户重试
+- `real_score < 0.65`：判定疑似假脸，直接拦截
+
+对应终端提示已经补上：
+
+- `疑似假脸`
+- `活体重试`
+- `重新对准`
+
+### 5. 运行依赖说明
+
+由于项目代码现在会在考勤链路里加载 OpenVINO 模型，因此项目运行环境需要：
+
+- `openvino==2024.6.0`
+
+依赖声明已经加入：
+
+- [pyproject.toml](/home/luck/face3/pyproject.toml)
+
+另外，`face_recognition_models` 当前仍然会因为内部使用 `pkg_resources` 打出一条已知兼容性警告。
+项目里已经对这条启动噪音做了静默处理，不影响实际识别逻辑。
+
+### 6. 下一步建议
+
+下一轮最值得继续补的是：
+
+1. 灰区触发简单转头挑战
+2. 连续多帧活体分数平滑
+3. 在管理员端显示最近一次活体分数与失败原因
+
+## 十七、2026-04-26 Windows 管理端增量说明
+
+这轮需要和 Windows 管理端同步的点，核心只有两类：
+
+1. 哪些老接口没有改
+2. 哪些审核相关接口和字段是新增的
+
+### 1. 老设备接口没有改
+
+下面这 4 个接口的地址和调用方式都没有改：
+
+- `GET /api/admin/device/info`
+- `GET /api/admin/device/health`
+- `GET /api/admin/device/metrics`
+- `POST /api/admin/device/reload-config`
+
+2026-04-26 已按当前运行时配置实测通过：
+
+- 树莓派地址：`http://100.74.44.24:5000`
+- 管理员 token：`chenhao`
+
+实测返回：
+
+- `GET /api/admin/device/info` -> `200`
+- `POST /api/admin/device/reload-config` -> `200`
+
+所以如果 Windows 端现在连设备信息或重载配置都拿不到，优先查 Windows 端自己的请求链路，不要先怀疑这轮新增审核字段把老接口改坏了。
+
+### 2. 新增的人脸审核接口
+
+这轮新增或增强的是这组审核接口：
+
+- `GET /api/admin/face-profiles/rejection-reasons`
+- `GET /api/admin/face-profiles/{face_profile_id}`
+- `GET /api/admin/face-profiles?review_status=pending`
+- `POST /api/admin/face-profiles/{face_profile_id}/review`
+
+审核提交现在支持：
+
+- `review_status`
+- `review_reason_codes`
+- `review_comment`
+- `reviewed_by`
+
+### 3. Windows 端要补的字段
+
+用户详情新增：
+
+- `approved_face_profiles_count`
+- `pending_face_profiles_count`
+- `rejected_face_profiles_count`
+- `face_profile_ready`
+- `face_profile_recognition_ready`
+- `recent_face_rejections`
+
+人脸档案新增：
+
+- `review_status`
+- `review_reason_codes`
+- `review_reason_labels`
+- `review_comment`
+- `reviewed_at`
+- `reviewed_by`
+- `recognition_enabled`
+- `recent_rejections`
+
+其中：
+
+- `review_status` 取值为 `pending / approved / rejected`
+- `recognition_enabled` 当前等价于 `review_status == approved`
+- `face_profile_recognition_ready` 表示该用户是否已经有审核通过、可进入正式识别名单的照片
+
+### 4. Windows 端建议补的功能
+
+- 审核页先请求 `GET /api/admin/face-profiles/rejection-reasons`，渲染固定驳回原因多选项
+- 驳回提交时至少带 `review_status` 和 `review_reason_codes`
+- 列表页和详情页展示审核状态、驳回原因、审核备注、审核人、审核时间、最近三次驳回记录
+- 用户详情页改用 `face_profile_recognition_ready` 判断“是否已进入正式识别”
+
+### 5. 活体检测这轮暂时不要求 Windows 端改接口
+
+这次接入的是树莓派终端本地“考勤前被动活体检测”，还没有新增 Windows 专用活体查询接口。
+
+所以这轮对 Windows 端真正有影响的，是人脸审核接口和字段，不是设备接口地址。
+
+更完整的对接说明见：
+
+- [docs/raspberry_pi_admin_api.md](/home/luck/face3/docs/raspberry_pi_admin_api.md)

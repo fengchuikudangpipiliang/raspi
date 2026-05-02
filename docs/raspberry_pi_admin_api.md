@@ -2173,3 +2173,241 @@ Windows 管理端可以直接调用：
 - 历史旧照片不保留
 
 这套策略更适合树莓派这种小体量部署环境。
+
+#### 15.21 2026-04-26 Windows 管理端增量对接说明
+
+这一节只说明两件事：
+
+1. 这轮树莓派侧到底改了哪些对 Windows 可见的接口和字段
+2. Windows 管理端为了接住这些增量，需要补哪些代码
+
+不要把这一节和普通故障排查混在一起看。
+
+##### 15.21.1 这轮没有改动的老接口
+
+下面这 4 个管理员设备接口，路由地址和调用方式都没有改：
+
+- `GET /api/admin/device/info`
+- `GET /api/admin/device/health`
+- `GET /api/admin/device/metrics`
+- `POST /api/admin/device/reload-config`
+
+也就是说，这轮新增的“人脸审核”“驳回原因”“活体检测”并没有改掉 Windows 原来已经在用的设备管理接口。
+
+2026-04-26 已按当前运行时配置实测通过：
+
+- 树莓派地址：`http://100.74.44.24:5000`
+- 管理员 token：`chenhao`
+
+实测结果：
+
+- `GET /api/admin/device/info` 返回 `200`
+- `POST /api/admin/device/reload-config` 返回 `200`
+- `GET /api/admin/face-profiles/rejection-reasons` 返回 `200`
+
+所以如果 Windows 端现在连“设备信息”或“重新加载配置”都失败，优先不要怀疑是这轮新增字段把老接口改坏了。
+
+##### 15.21.2 这轮新增或增强的 Windows 可见接口
+
+本轮真正新增或增强的，是“人脸审核链路”这一组接口。
+
+###### 新增 1：驳回原因字典
+
+`GET /api/admin/face-profiles/rejection-reasons`
+
+用途：
+
+- 给 Windows 审核页加载固定驳回原因选项
+- 让管理员不用手写自由文本
+
+返回结构：
+
+```json
+{
+  "ok": true,
+  "items": [
+    { "code": "cartoon_avatar", "label": "卡通头像或虚拟形象" }
+  ],
+  "total": 10
+}
+```
+
+###### 新增 2：人脸档案详情
+
+`GET /api/admin/face-profiles/{face_profile_id}`
+
+用途：
+
+- 查看单个人脸档案当前审核状态
+- 查看审核备注、驳回原因和最近驳回历史
+
+###### 增强 3：人脸档案列表支持审核状态过滤
+
+`GET /api/admin/face-profiles?review_status=pending`
+
+允许值：
+
+- `pending`
+- `approved`
+- `rejected`
+
+如果 Windows 端要做“待审核”“已通过”“已驳回”分页或标签过滤，就要用这个参数。
+
+###### 增强 4：审核提交接口支持结构化驳回原因
+
+`POST /api/admin/face-profiles/{face_profile_id}/review`
+
+新增支持的提交字段：
+
+- `review_status`
+- `review_reason_codes`
+- `review_comment`
+- `reviewed_by`
+
+典型提交示例：
+
+```json
+{
+  "review_status": "rejected",
+  "review_reason_codes": ["cartoon_avatar", "screen_photo"],
+  "review_comment": "请上传本人正脸原始照片。",
+  "reviewed_by": "admin01"
+}
+```
+
+##### 15.21.3 这轮新增的返回字段
+
+Windows 管理端如果当前是强类型 DTO、ViewModel 或前端显式字段绑定，就要把下面这些字段补进去。
+
+###### 用户详情新增字段
+
+- `approved_face_profiles_count`
+- `pending_face_profiles_count`
+- `rejected_face_profiles_count`
+- `face_profile_ready`
+- `face_profile_recognition_ready`
+- `recent_face_rejections`
+
+说明：
+
+- `face_profile_ready` 表示用户是否已有可展示的人脸资料状态
+- `face_profile_recognition_ready` 表示是否已有“审核通过、能进入终端正式识别名单”的照片
+- `recent_face_rejections` 是用户最近三次驳回记录
+
+###### 人脸档案新增字段
+
+- `review_status`
+- `review_reason_codes`
+- `review_reason_labels`
+- `review_comment`
+- `reviewed_at`
+- `reviewed_by`
+- `recognition_enabled`
+- `recent_rejections`
+
+说明：
+
+- `review_status` 取值为 `pending / approved / rejected`
+- `review_reason_codes` 是稳定编码，适合程序处理
+- `review_reason_labels` 是中文标签，适合直接显示
+- `recognition_enabled` 当前等价于 `review_status == "approved"`
+- `recent_rejections` 是当前用户最近三次驳回记录，方便详情页直接展示
+
+##### 15.21.4 Windows 管理端需要补的功能
+
+如果 Windows 端要完整接住这轮增量，至少要补下面这些点。
+
+###### 1. 审核页加载固定驳回原因
+
+打开审核页时，请先请求：
+
+- `GET /api/admin/face-profiles/rejection-reasons`
+
+把返回的 `items` 渲染成可多选的固定原因列表。
+
+###### 2. 驳回提交改成结构化数据
+
+驳回时不要只提交一段纯文本备注，至少应提交：
+
+- `review_status`
+- `review_reason_codes`
+
+可选再补：
+
+- `review_comment`
+- `reviewed_by`
+
+###### 3. 人脸列表和详情页展示审核状态
+
+Windows 端至少应该显示：
+
+- 审核状态
+- 驳回原因
+- 审核备注
+- 审核时间
+- 审核人
+- 最近三次驳回记录
+
+###### 4. 用户详情页增加“识别是否就绪”
+
+请使用：
+
+- `face_profile_recognition_ready`
+
+不要再简单地把“上传过照片”直接等同于“已经能参加正式识别”。
+
+因为这轮之后，只有审核通过的照片才进入正式识别名单。
+
+##### 15.21.5 活体检测这轮没有新增 Windows 专用接口
+
+这次树莓派终端接入的是第一版“考勤前被动活体检测”。
+
+这部分改动只影响树莓派终端本地识别流程，目前没有新增下面这类接口：
+
+- 活体分数查询接口
+- 活体失败历史接口
+- 活体策略远程配置接口
+
+所以：
+
+- Windows 端现在不需要因为活体检测第一版去改设备接口地址
+- 也不需要因为活体检测第一版去改 `reload-config` 的调用方式
+
+这轮对 Windows 端真正有影响的，还是上面的人脸审核接口和字段。
+
+##### 15.21.6 如果 Windows 端现在报 502，要先怎么判断
+
+如果 Windows 本地日志里看到：
+
+```text
+POST /device/reload-config HTTP/1.1" 303 See Other
+GET /?error=树莓派接口调用失败，HTTP 502
+```
+
+这更像是：
+
+- Windows 本地页面路由先收到了 `/device/reload-config`
+- Windows 服务端再去请求树莓派 `/api/admin/device/reload-config`
+- 上游失败后，Windows 服务端把错误包装成了自己的 `502`
+
+由于 2026-04-26 已经用当前配置实测过树莓派老接口返回 `200`，所以这类 `502` 更应该优先排查 Windows 端自己的：
+
+- 基础地址拼接
+- `Authorization: Bearer chenhao`
+- 本地代理或超时
+- 上游错误包装逻辑
+
+##### 15.21.7 最小对接清单
+
+给 Windows 端同学的最小结论就是：
+
+1. 老设备接口没改，不需要为了这轮审核和活体改老路由
+2. 新增的是人脸审核接口和审核状态字段
+3. Windows 端要补固定驳回原因、多选驳回提交、审核状态展示、识别就绪展示
+4. 如果当前连 `device/info` 或 `reload-config` 都失败，先查 Windows 端请求链路，不要先怀疑这轮新增字段
+
+优先先确认：
+
+1. Windows 管理端保存的 Bearer Token 是否和树莓派当前 `env.json` 完全一致
+2. Windows 管理端请求的端口是否仍然是 `5000`
+3. Windows 管理端拼接的路径是否带了 `/api/admin/`

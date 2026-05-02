@@ -13,5 +13,7 @@ dependencies = [
     "numpy==2.0.2",
     "opencv-contrib-python==4.13.0.92",
     "opencv-python==4.13.0.92",
+    "openvino==2024.6.0",
     "pillow==11.3.0",
+    "setuptools<81",
 ]

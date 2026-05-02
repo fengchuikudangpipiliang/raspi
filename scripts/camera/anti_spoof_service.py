@@ -109,12 +109,23 @@ class AntiSpoofService:
             )
 
         in_gray_zone = real_score >= self.gray_threshold
+        if in_gray_zone:
+            return AntiSpoofResult(
+                checked=True,
+                available=True,
+                passed=True,
+                gray_zone=True,
+                reason="liveness_uncertain",
+                real_score=real_score,
+                spoof_score=spoof_score,
+            )
+
         return AntiSpoofResult(
             checked=True,
             available=True,
             passed=False,
-            gray_zone=in_gray_zone,
-            reason="liveness_uncertain" if in_gray_zone else "spoof_suspected",
+            gray_zone=False,
+            reason="spoof_suspected",
             real_score=real_score,
             spoof_score=spoof_score,
         )

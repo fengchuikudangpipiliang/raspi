@@ -176,6 +176,7 @@ class StrictFaceRecognizer:
         self.stable_timeout_seconds = float(stable_timeout_seconds)
         self.attendance_cooldown_seconds = int(attendance_cooldown_seconds or cfg.attendance_cooldown_seconds)
         self.liveness_service = AntiSpoofService()
+        self.liveness_fail_required_times = max(int(cfg.attendance_liveness_fail_required_times), 1)
 
         self.known_profiles: list[KnownFaceProfile] = []
         self.known_encodings: list[np.ndarray] = []
@@ -185,6 +186,7 @@ class StrictFaceRecognizer:
         self._last_stable_at = 0.0
         self._last_attendance_at: dict[int, float] = {}
         self._last_result: Optional[RecognitionResult] = None
+        self._liveness_low_score_count = 0
 
     def reload_known_faces(self) -> int:
         """
@@ -341,10 +343,14 @@ class StrictFaceRecognizer:
         result.liveness_real_score = liveness_result.real_score
         result.liveness_spoof_score = liveness_result.spoof_score
         if liveness_result.checked and not liveness_result.passed:
-            result.reason = liveness_result.reason
-            self._reset_on_failed_frame()
-            self._last_result = result
-            return result
+            self._liveness_low_score_count += 1
+            if self._liveness_low_score_count >= self.liveness_fail_required_times:
+                result.reason = "spoof_suspected"
+                self._reset_on_failed_frame()
+                self._last_result = result
+                return result
+        if liveness_result.checked and liveness_result.passed:
+            self._liveness_low_score_count = 0
 
         encodings = face_recognition.face_encodings(
             frame_rgb,
@@ -392,6 +398,12 @@ class StrictFaceRecognizer:
             face_profile_id=matched_profile.face_profile_id,
             timestamp=timestamp,
         )
+        if self._liveness_low_score_count > 0:
+            result.reason = "liveness_uncertain"
+            result.ok = True
+            self._last_result = result
+            return result
+
         if result.stable_count < self.match_required_times:
             result.reason = "match_not_stable_yet"
             result.ok = True
@@ -453,6 +465,7 @@ class StrictFaceRecognizer:
 
     def _reset_on_failed_frame(self) -> None:
         self.reset_tracking()
+        self._liveness_low_score_count = 0
 
     def _normalize_frame(self, frame_bgr: np.ndarray) -> np.ndarray:
         frame = frame_bgr

@@ -1907,16 +1907,16 @@ Windows 端现在最少应接住这几个场景：
 
 ### 4. 推荐阈值思路
 
-第一版可以先按下面思路做：
+现场试跑后，第一版阈值已经调整成更包容的考勤策略：
 
-- `real_score >= 0.85`：直接进入识别
-- `0.65 <= real_score < 0.85`：灰区，触发主动活体
-- `real_score < 0.65`：直接拒绝签到
+- `real_score >= 0.55`：直接进入识别
+- `0.30 <= real_score < 0.55`：灰区，先允许进入识别，后续再接主动活体
+- `real_score < 0.30`：记为一次低分，连续多帧低分后拒绝签到
 
 说明：
 
-- 这是第一版起步阈值
-- 后续仍然要根据树莓派摄像头、现场补光和真实样本再调整
+- 考勤场景优先避免真人被单帧误杀
+- 后续仍然要根据树莓派摄像头、现场补光和真实样本继续微调
 
 ### 5. 模型下载建议
 
@@ -1992,12 +1992,13 @@ uv run --no-project --python .venv-omz/bin/python omz_converter --name anti-spoo
 
 终端实时识别链路现在变成：
 
-`检测单人脸 -> 裁剪人脸区域 -> anti-spoof-mn3 被动活体 -> 活体通过后才做人脸编码识别 -> 稳定帧 -> 写入考勤`
+`检测单人脸 -> 裁剪人脸区域 -> anti-spoof-mn3 被动活体 -> 低分连续确认 -> 人脸编码识别 -> 稳定帧 -> 写入考勤`
 
 也就是说：
 
-- 如果模型判断疑似照片、翻拍或假脸，就不会继续进入人脸识别
-- 如果活体分数处于灰区，当前第一版会先拒绝并提示重新正对镜头
+- 如果模型判断疑似照片、翻拍或假脸，会先允许继续做人脸匹配，但暂不写考勤
+- 只有连续多帧低分确认后，才会拦截
+- 如果活体分数处于灰区，当前版本会继续进入识别，不再单帧硬拒绝
 - 后续第二版再把“灰区触发主动转头挑战”补进去
 
 ### 2. 当前新增的代码位置
@@ -2026,14 +2027,16 @@ uv run --no-project --python .venv-omz/bin/python omz_converter --name anti-spoo
 - `attendance_liveness_device`
 - `attendance_liveness_real_threshold`
 - `attendance_liveness_gray_threshold`
+- `attendance_liveness_fail_required_times`
 
 当前 `env.json` 测试值是：
 
 - `attendance_liveness_enabled = true`
 - `attendance_liveness_model_path = third_party/openvino_models_ir/public/anti-spoof-mn3/FP32/anti-spoof-mn3.xml`
 - `attendance_liveness_device = CPU`
-- `attendance_liveness_real_threshold = 0.85`
-- `attendance_liveness_gray_threshold = 0.65`
+- `attendance_liveness_real_threshold = 0.55`
+- `attendance_liveness_gray_threshold = 0.30`
+- `attendance_liveness_fail_required_times = 3`
 
 相关文件：
 
@@ -2044,11 +2047,13 @@ uv run --no-project --python .venv-omz/bin/python omz_converter --name anti-spoo
 
 第一版先做的是最稳妥的被动活体前置，不在这次里硬接主动挑战状态机。
 
-当前规则：
+当前规则已经从“单帧硬拦”调整成更适合现场考勤的宽松策略：
 
-- `real_score >= 0.85`：放行进入识别
-- `0.65 <= real_score < 0.85`：判定灰区，提示用户重试
-- `real_score < 0.65`：判定疑似假脸，直接拦截
+- `real_score >= 0.55`：放行进入识别
+- `0.30 <= real_score < 0.55`：灰区，也放行进入识别
+- `real_score < 0.30`：记为一次低分；低分期间允许继续做人脸匹配，但不写考勤；连续 `3` 次低分后才判定疑似假脸
+
+这么做是为了避免树莓派现场摄像头在过曝、模糊、角度轻微偏移时，把真人单帧误判成假脸。
 
 对应终端提示已经补上：
 

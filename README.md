@@ -2221,3 +2221,154 @@ uv run --no-project --python .venv-omz/bin/python omz_converter --name anti-spoo
 - `snapshot_available = false`：快照已过期清理或不存在，`snapshot_url = null`
 
 Windows 管理端应使用 `snapshot_available` 控制“查看快照”按钮是否可用，不要只看 `snapshot_path`。
+
+## 十九、2026-05-02 考勤端随机转头活体挑战
+
+这一节记录 2026-05-02 新增的考勤端主动活体挑战。前面的历史章节不再回填修改。
+
+### 1. 这次解决什么问题
+
+单帧 `anti-spoof-mn3` 可以识别一部分照片、屏幕翻拍风险，但它不能单独可靠地区分“真人现场”和“手机播放预录视频”。
+
+所以现在考勤端增加了随机动作挑战：
+
+`识别到身份 -> 业务规则通过 -> 随机要求左/右转头 -> 要求回正脸 -> 再允许写入考勤`
+
+### 2. 当前默认策略
+
+当前 `env.json` 默认开启，但不是每次都触发：
+
+- `attendance_liveness_challenge_enabled = true`
+- `attendance_liveness_challenge_mode = risk`
+
+这表示正常高置信度签到仍然直接出结果，只有下面这些可疑情况才触发轻量随机转头挑战：
+
+- 被动活体处于灰区
+- 被动活体连续低分
+- 人脸识别距离接近阈值
+
+这样做的原因是：
+
+- 静态照片很难产生真实头部 yaw 变化
+- 预录视频不知道本次随机要求左转还是右转
+- 挑战与当前识别到的用户绑定，换人或人脸离开会重新开始
+- 挑战有短时间窗口，过期后会重新随机
+- 日常正常签到保留类似门禁的无感体验
+
+### 3. 新增配置项
+
+- `attendance_liveness_challenge_enabled`
+- `attendance_liveness_challenge_mode`
+- `attendance_liveness_challenge_ttl_seconds`
+- `attendance_liveness_challenge_pass_seconds`
+- `attendance_liveness_challenge_front_yaw_max`
+- `attendance_liveness_challenge_side_yaw_min`
+- `attendance_liveness_challenge_side_yaw_max`
+- `attendance_liveness_challenge_distance_ratio`
+
+当前测试值：
+
+- `attendance_liveness_challenge_enabled = true`
+- `attendance_liveness_challenge_mode = risk`
+- `attendance_liveness_challenge_ttl_seconds = 8`
+- `attendance_liveness_challenge_pass_seconds = 3`
+- `attendance_liveness_challenge_front_yaw_max = 0.18`
+- `attendance_liveness_challenge_side_yaw_min = 0.12`
+- `attendance_liveness_challenge_side_yaw_max = 0.60`
+- `attendance_liveness_challenge_distance_ratio = 0.85`
+
+### 4. 终端页新增状态
+
+左上角状态框会出现：
+
+- `向左转头`
+- `向右转头`
+- `回到正脸`
+
+用户只需要轻微转头，不需要大幅动作。
+
+### 5. Windows 管理端影响
+
+这次没有新增 Windows 专用接口。
+
+随机转头挑战发生在树莓派终端本地识别流程里，Windows 端暂时不需要改接口调用。后续如果要在 Windows 管理端查看某次签到的活体挑战结果，再单独新增考勤活体审计字段。
+
+## 二十、2026-05-02 活体检测产品约束：只做被动检测
+
+这一节记录新的产品边界：考勤现场不能要求用户转头、眨眼、读数字或做其他配合动作。
+
+因此当前默认配置已经关闭主动挑战：
+
+- `attendance_liveness_challenge_enabled = false`
+- `attendance_liveness_challenge_mode = off`
+
+后续活体检测只从树莓派摄像头拍到的画面里做被动判断，重点方向是：
+
+- 多帧 `anti-spoof-mn3` 分数平滑，而不是单帧判断
+- 屏幕重放特征，比如摩尔纹、屏幕反光、局部过平纹理
+- 时序一致性，比如人脸关键点的自然微动和整张平面移动差异
+- RGB rPPG 生命体征线索，但只作为弱信号，不单独决定真假
+- 签到快照和活体风险日志，便于现场调参和管理员复核
+
+这意味着系统目标从“主动证明用户是真人”调整为“无感识别为主，基于被动画面风险降低照片和视频攻击通过率”。
+
+## 二十一、2026-05-02 低负载被动活体融合第一版
+
+这一节记录在“不要求用户做动作”的产品约束下，考勤端新增的被动活体融合实现。
+
+### 1. 当前实现
+
+现在不再只看单帧 `anti-spoof-mn3` 结果，而是维护一个短时间滑动窗口：
+
+- 窗口长度：`attendance_liveness_window_seconds = 2.0`
+- 最少样本：`attendance_liveness_window_min_samples = 3`
+
+系统在识别线程里融合：
+
+- 多帧 `real_score`
+- 多帧低分次数
+- 灰区次数
+- 人脸裁剪图的屏幕重放风险
+
+这些计算只发生在现有低频识别线程里，不进入 MJPEG 视频推流线程。
+
+### 2. 屏幕重放风险信号
+
+当前第一版用轻量图像特征估计手机屏幕/视频重放风险：
+
+- 高亮低饱和反光比例
+- Canny 边缘密度
+- 灰度频域高频能量比例
+
+这些信号只在裁剪后的人脸小图上计算，内部会缩放到 `96x96`，负载可控。
+
+### 3. 新增配置项
+
+- `attendance_liveness_window_seconds`
+- `attendance_liveness_window_min_samples`
+- `attendance_liveness_window_real_threshold`
+- `attendance_liveness_window_replay_risk_threshold`
+- `attendance_liveness_window_uncertain_real_threshold`
+- `attendance_liveness_window_uncertain_replay_risk_threshold`
+
+当前测试值：
+
+- `attendance_liveness_window_seconds = 2.0`
+- `attendance_liveness_window_min_samples = 3`
+- `attendance_liveness_window_real_threshold = 0.45`
+- `attendance_liveness_window_replay_risk_threshold = 0.72`
+- `attendance_liveness_window_uncertain_real_threshold = 0.35`
+- `attendance_liveness_window_uncertain_replay_risk_threshold = 0.55`
+
+### 4. 当前判定方式
+
+- 样本不足时，状态显示“正在确认”，暂不写入考勤
+- 多帧结果稳定且风险低，直接签到
+- 多帧 `real_score` 偏低，进入“正在确认”
+- 连续低分或屏幕重放风险过高，判定“疑似假脸”
+
+### 5. Windows 管理端影响
+
+这次没有新增 Windows 专用接口。
+
+活体融合发生在树莓派终端本地识别流程中。后续如果要让 Windows 端查看某次签到的活体分数、屏幕风险或判定原因，再追加新的审计字段。

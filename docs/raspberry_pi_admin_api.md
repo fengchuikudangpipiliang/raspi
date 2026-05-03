@@ -2494,3 +2494,148 @@ GET /?error=树莓派接口调用失败，HTTP 502
 - `GET /api/admin/attendance/{attendance_id}/snapshot`
 
 树莓派会返回 `404`。这不是接口故障，而是快照已经按 7 天保留策略清理。
+
+#### 15.23 2026-05-02 考勤端随机转头活体挑战增量
+
+这一节记录 2026-05-02 新增的考勤端主动活体挑战。前面的历史接口说明保持原口径，不再回填修改。
+
+##### 15.23.1 树莓派侧做了什么
+
+考勤端现在新增随机转头挑战，用来增强对照片和预录视频攻击的区分能力。
+
+当前流程：
+
+1. 检测单人脸
+2. 执行 `anti-spoof-mn3` 被动活体风险判断
+3. 完成人脸识别，确认当前用户身份
+4. 判断考勤时间、冷却、重复签到等业务规则
+5. 高置信度正常签到直接写入考勤
+6. 只有活体灰区、连续低分或识别距离接近阈值时，才随机要求用户轻微向左或向右转头
+7. 检测到指定方向后，要求用户回到正脸
+8. 身份仍然一致且动作完成后，才写入考勤
+
+这不是每次都让用户转头，而是把单帧模型分数、身份识别和随机动作过程组合成“风险触发”的二次确认。
+
+##### 15.23.2 新增配置项
+
+- `attendance_liveness_challenge_enabled`
+- `attendance_liveness_challenge_mode`
+- `attendance_liveness_challenge_ttl_seconds`
+- `attendance_liveness_challenge_pass_seconds`
+- `attendance_liveness_challenge_front_yaw_max`
+- `attendance_liveness_challenge_side_yaw_min`
+- `attendance_liveness_challenge_side_yaw_max`
+- `attendance_liveness_challenge_distance_ratio`
+
+当前树莓派测试值：
+
+- `attendance_liveness_challenge_enabled = true`
+- `attendance_liveness_challenge_mode = risk`
+- `attendance_liveness_challenge_ttl_seconds = 8`
+- `attendance_liveness_challenge_pass_seconds = 3`
+- `attendance_liveness_challenge_front_yaw_max = 0.18`
+- `attendance_liveness_challenge_side_yaw_min = 0.12`
+- `attendance_liveness_challenge_side_yaw_max = 0.60`
+- `attendance_liveness_challenge_distance_ratio = 0.85`
+
+`attendance_liveness_challenge_mode` 当前支持：
+
+- `always`：每次写入考勤前都要求随机转头挑战
+- `risk`：只在活体灰区、连续低分或人脸距离接近阈值时要求挑战
+- `off / disabled / false / none`：关闭主动挑战
+
+当前为了兼顾门禁式体验和安全性，默认使用 `risk`。
+
+##### 15.23.3 Windows 管理端需要怎么改
+
+这次没有新增 Windows 专用接口，也没有改变现有管理员接口路径。
+
+Windows 管理端暂时不需要为了这次随机转头挑战改接口调用。
+
+如果后续要在 Windows 管理端查看某次签到的活体挑战详情，再新增考勤活体审计字段，例如：
+
+- 挑战方向
+- 是否挑战通过
+- 活体分数
+- 挑战耗时
+- 失败原因
+
+#### 15.24 2026-05-02 活体检测产品约束：只做被动检测
+
+这一节记录新的产品边界：考勤现场不能要求用户转头、眨眼、读数字或做其他配合动作。
+
+因此树莓派当前默认配置已经关闭主动挑战：
+
+- `attendance_liveness_challenge_enabled = false`
+- `attendance_liveness_challenge_mode = off`
+
+后续活体检测只从树莓派摄像头拍到的画面里做被动判断。
+
+##### 15.24.1 Windows 管理端影响
+
+这次没有新增 Windows 专用接口，也没有改变现有接口路径。
+
+Windows 端暂时只需要知道：
+
+- 树莓派不会在正常考勤流程里要求用户做动作
+- 活体判断结果仍然发生在树莓派本地
+- 如果后续新增活体风险日志或审计字段，会继续追加到本文档最后
+
+#### 15.25 2026-05-02 低负载被动活体融合第一版
+
+这一节记录在“不要求用户做动作”的产品约束下，树莓派侧新增的被动活体融合实现。
+
+##### 15.25.1 树莓派侧做了什么
+
+考勤端现在不再只看单帧 `anti-spoof-mn3` 结果，而是维护短时间滑动窗口。
+
+当前窗口配置：
+
+- `attendance_liveness_window_seconds = 2.0`
+- `attendance_liveness_window_min_samples = 3`
+
+融合信号：
+
+- 多帧 `real_score`
+- 多帧低分次数
+- 灰区次数
+- 人脸裁剪图的屏幕重放风险
+
+屏幕重放风险第一版只用轻量图像特征：
+
+- 高亮低饱和反光比例
+- Canny 边缘密度
+- 灰度频域高频能量比例
+
+这些计算只发生在树莓派本地低频识别线程里，不进入视频推流线程。
+
+##### 15.25.2 新增配置项
+
+- `attendance_liveness_window_seconds`
+- `attendance_liveness_window_min_samples`
+- `attendance_liveness_window_real_threshold`
+- `attendance_liveness_window_replay_risk_threshold`
+- `attendance_liveness_window_uncertain_real_threshold`
+- `attendance_liveness_window_uncertain_replay_risk_threshold`
+
+当前测试值：
+
+- `attendance_liveness_window_seconds = 2.0`
+- `attendance_liveness_window_min_samples = 3`
+- `attendance_liveness_window_real_threshold = 0.45`
+- `attendance_liveness_window_replay_risk_threshold = 0.72`
+- `attendance_liveness_window_uncertain_real_threshold = 0.35`
+- `attendance_liveness_window_uncertain_replay_risk_threshold = 0.55`
+
+##### 15.25.3 Windows 管理端需要怎么改
+
+这次没有新增 Windows 专用接口，也没有改变现有接口路径。
+
+Windows 管理端暂时不需要修改请求代码。
+
+如果后续要在 Windows 端展示某次签到的活体审计结果，可以再新增字段，例如：
+
+- 多帧平均 `real_score`
+- 屏幕重放风险分
+- 是否连续低分
+- 最终活体判定原因

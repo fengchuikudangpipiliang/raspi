@@ -1,7 +1,9 @@
 import json
+import random
 import sqlite3
 import time
 import warnings
+from collections import deque
 from dataclasses import asdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -53,6 +55,18 @@ class PoseSummary:
 
 
 @dataclass
+class LivenessWindowSummary:
+    sample_count: int
+    checked_count: int
+    avg_real_score: Optional[float]
+    min_real_score: Optional[float]
+    low_score_count: int
+    gray_count: int
+    avg_replay_risk_score: float
+    max_replay_risk_score: float
+
+
+@dataclass
 class RecognitionResult:
     """
     单帧识别结果。
@@ -80,6 +94,9 @@ class RecognitionResult:
     liveness_gray_zone: bool = False
     liveness_real_score: Optional[float] = None
     liveness_spoof_score: Optional[float] = None
+    liveness_window_real_score: Optional[float] = None
+    liveness_replay_risk_score: Optional[float] = None
+    liveness_window_sample_count: int = 0
     blur_score: Optional[float] = None
     brightness_score: Optional[float] = None
     pose: Optional[PoseSummary] = None
@@ -107,6 +124,10 @@ REASON_DISPLAY = {
     "liveness_uncertain": "活体结果不够稳定，请正对镜头后重试",
     "spoof_suspected": "疑似照片或翻拍，请真人到场签到",
     "liveness_passed": "活体检测通过",
+    "liveness_challenge_turn_left": "请轻微向左转头",
+    "liveness_challenge_turn_right": "请轻微向右转头",
+    "liveness_challenge_front": "请转回正脸",
+    "liveness_challenge_timeout": "动作确认超时，请重新开始",
     "image_blurry": "画面偏模糊，请保持稳定",
     "bad_lighting": "光线不合适，请调整亮度",
     "landmarks_missing": "关键点提取失败，请正视镜头",
@@ -177,6 +198,20 @@ class StrictFaceRecognizer:
         self.attendance_cooldown_seconds = int(attendance_cooldown_seconds or cfg.attendance_cooldown_seconds)
         self.liveness_service = AntiSpoofService()
         self.liveness_fail_required_times = max(int(cfg.attendance_liveness_fail_required_times), 1)
+        self.liveness_window_seconds = max(float(cfg.attendance_liveness_window_seconds), 0.5)
+        self.liveness_window_min_samples = max(int(cfg.attendance_liveness_window_min_samples), 1)
+        self.liveness_window_real_threshold = float(cfg.attendance_liveness_window_real_threshold)
+        self.liveness_window_replay_risk_threshold = float(cfg.attendance_liveness_window_replay_risk_threshold)
+        self.liveness_window_uncertain_real_threshold = float(cfg.attendance_liveness_window_uncertain_real_threshold)
+        self.liveness_window_uncertain_replay_risk_threshold = float(cfg.attendance_liveness_window_uncertain_replay_risk_threshold)
+        self.liveness_challenge_enabled = bool(cfg.attendance_liveness_challenge_enabled)
+        self.liveness_challenge_mode = str(cfg.attendance_liveness_challenge_mode or "risk").strip().lower()
+        self.liveness_challenge_ttl_seconds = max(float(cfg.attendance_liveness_challenge_ttl_seconds), 3.0)
+        self.liveness_challenge_pass_seconds = max(float(cfg.attendance_liveness_challenge_pass_seconds), 1.0)
+        self.liveness_challenge_front_yaw_max = float(cfg.attendance_liveness_challenge_front_yaw_max)
+        self.liveness_challenge_side_yaw_min = float(cfg.attendance_liveness_challenge_side_yaw_min)
+        self.liveness_challenge_side_yaw_max = float(cfg.attendance_liveness_challenge_side_yaw_max)
+        self.liveness_challenge_distance_ratio = float(cfg.attendance_liveness_challenge_distance_ratio)
 
         self.known_profiles: list[KnownFaceProfile] = []
         self.known_encodings: list[np.ndarray] = []
@@ -187,6 +222,13 @@ class StrictFaceRecognizer:
         self._last_attendance_at: dict[int, float] = {}
         self._last_result: Optional[RecognitionResult] = None
         self._liveness_low_score_count = 0
+        self._liveness_window = deque()
+        self._challenge_user_id: Optional[int] = None
+        self._challenge_face_profile_id: Optional[int] = None
+        self._challenge_direction: Optional[str] = None
+        self._challenge_step: Optional[str] = None
+        self._challenge_expires_at = 0.0
+        self._challenge_passed_until: dict[int, float] = {}
 
     def reload_known_faces(self) -> int:
         """
@@ -337,20 +379,17 @@ class StrictFaceRecognizer:
 
         face_roi = self._extract_face_roi(frame_bgr, location)
         liveness_result = self.liveness_service.analyze_face(face_roi)
+        replay_risk_score = self._estimate_replay_risk_score(face_roi)
+        liveness_summary = self._add_liveness_sample(timestamp, liveness_result, replay_risk_score)
         result.liveness_checked = liveness_result.checked
         result.liveness_passed = liveness_result.passed
         result.liveness_gray_zone = liveness_result.gray_zone
         result.liveness_real_score = liveness_result.real_score
         result.liveness_spoof_score = liveness_result.spoof_score
-        if liveness_result.checked and not liveness_result.passed:
-            self._liveness_low_score_count += 1
-            if self._liveness_low_score_count >= self.liveness_fail_required_times:
-                result.reason = "spoof_suspected"
-                self._reset_on_failed_frame()
-                self._last_result = result
-                return result
-        if liveness_result.checked and liveness_result.passed:
-            self._liveness_low_score_count = 0
+        result.liveness_replay_risk_score = replay_risk_score
+        result.liveness_window_sample_count = liveness_summary.sample_count
+        result.liveness_window_real_score = liveness_summary.avg_real_score
+        self._liveness_low_score_count = liveness_summary.low_score_count
 
         encodings = face_recognition.face_encodings(
             frame_rgb,
@@ -398,15 +437,18 @@ class StrictFaceRecognizer:
             face_profile_id=matched_profile.face_profile_id,
             timestamp=timestamp,
         )
-        if self._liveness_low_score_count > 0:
-            result.reason = "liveness_uncertain"
+        if result.stable_count < self.match_required_times:
+            result.reason = "match_not_stable_yet"
             result.ok = True
             self._last_result = result
             return result
 
-        if result.stable_count < self.match_required_times:
-            result.reason = "match_not_stable_yet"
-            result.ok = True
+        liveness_decision = self._evaluate_passive_liveness(liveness_summary)
+        if liveness_decision:
+            result.reason = liveness_decision
+            result.ok = liveness_decision == "liveness_uncertain"
+            if liveness_decision == "spoof_suspected":
+                self._reset_on_failed_frame()
             self._last_result = result
             return result
 
@@ -424,6 +466,25 @@ class StrictFaceRecognizer:
             result.ok = True
             self._last_result = result
             return result
+
+        if self._should_require_liveness_challenge(
+            result=result,
+            liveness_gray_zone=liveness_result.gray_zone,
+            distance=best_distance,
+            timestamp=timestamp,
+        ):
+            challenge_reason = self._advance_liveness_challenge(
+                frame_rgb=frame_rgb,
+                location=location,
+                user_id=matched_profile.user_id,
+                face_profile_id=matched_profile.face_profile_id,
+                timestamp=timestamp,
+            )
+            if challenge_reason:
+                result.reason = challenge_reason
+                result.ok = True
+                self._last_result = result
+                return result
 
         result.ok = True
         result.reason = "attendance_ready"
@@ -466,6 +527,212 @@ class StrictFaceRecognizer:
     def _reset_on_failed_frame(self) -> None:
         self.reset_tracking()
         self._liveness_low_score_count = 0
+        self._liveness_window.clear()
+        self._reset_liveness_challenge()
+
+    def _add_liveness_sample(self, timestamp: float, liveness_result, replay_risk_score: float) -> LivenessWindowSummary:
+        self._liveness_window.append(
+            {
+                "timestamp": timestamp,
+                "checked": bool(liveness_result.checked),
+                "passed": bool(liveness_result.passed),
+                "gray_zone": bool(liveness_result.gray_zone),
+                "real_score": liveness_result.real_score,
+                "replay_risk_score": float(replay_risk_score),
+            }
+        )
+
+        cutoff = timestamp - self.liveness_window_seconds
+        while self._liveness_window and self._liveness_window[0]["timestamp"] < cutoff:
+            self._liveness_window.popleft()
+
+        return self._summarize_liveness_window()
+
+    def _summarize_liveness_window(self) -> LivenessWindowSummary:
+        samples = list(self._liveness_window)
+        checked_samples = [sample for sample in samples if sample["checked"]]
+        real_scores = [
+            float(sample["real_score"])
+            for sample in checked_samples
+            if sample.get("real_score") is not None
+        ]
+        replay_scores = [float(sample["replay_risk_score"]) for sample in samples]
+        low_score_count = sum(
+            1
+            for sample in checked_samples
+            if sample.get("real_score") is not None
+            and float(sample["real_score"]) < self.liveness_service.gray_threshold
+        )
+        gray_count = sum(1 for sample in checked_samples if sample["gray_zone"])
+        return LivenessWindowSummary(
+            sample_count=len(samples),
+            checked_count=len(checked_samples),
+            avg_real_score=float(np.mean(real_scores)) if real_scores else None,
+            min_real_score=float(np.min(real_scores)) if real_scores else None,
+            low_score_count=low_score_count,
+            gray_count=gray_count,
+            avg_replay_risk_score=float(np.mean(replay_scores)) if replay_scores else 0.0,
+            max_replay_risk_score=float(np.max(replay_scores)) if replay_scores else 0.0,
+        )
+
+    def _evaluate_passive_liveness(self, summary: LivenessWindowSummary) -> Optional[str]:
+        if not self.liveness_service.enabled or summary.checked_count == 0:
+            return None
+        if summary.checked_count < self.liveness_window_min_samples:
+            return "liveness_uncertain"
+        if summary.low_score_count >= self.liveness_fail_required_times:
+            return "spoof_suspected"
+        if summary.max_replay_risk_score >= self.liveness_window_replay_risk_threshold:
+            return "spoof_suspected"
+        if (
+            summary.avg_real_score is not None
+            and summary.avg_real_score < self.liveness_window_uncertain_real_threshold
+            and summary.avg_replay_risk_score >= self.liveness_window_uncertain_replay_risk_threshold
+        ):
+            return "spoof_suspected"
+        if summary.avg_real_score is not None and summary.avg_real_score < self.liveness_window_real_threshold:
+            return "liveness_uncertain"
+        if summary.avg_replay_risk_score >= self.liveness_window_uncertain_replay_risk_threshold:
+            return "liveness_uncertain"
+        return None
+
+    def _estimate_replay_risk_score(self, face_roi: np.ndarray) -> float:
+        if face_roi is None or not isinstance(face_roi, np.ndarray) or face_roi.size == 0:
+            return 0.0
+
+        resized = cv2.resize(face_roi, (96, 96), interpolation=cv2.INTER_AREA)
+        gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+        hsv = cv2.cvtColor(resized, cv2.COLOR_BGR2HSV)
+        saturation = hsv[:, :, 1]
+        value = hsv[:, :, 2]
+
+        glare_ratio = float(np.mean((value > 245) & (saturation < 70)))
+        glare_risk = self._clamp01((glare_ratio - 0.02) / 0.10)
+
+        edges = cv2.Canny(gray, 80, 160)
+        edge_density = float(np.mean(edges > 0))
+        edge_risk = self._clamp01((edge_density - 0.18) / 0.20)
+
+        gray_float = gray.astype(np.float32)
+        gray_float -= float(gray_float.mean())
+        spectrum = np.fft.fftshift(np.fft.fft2(gray_float))
+        magnitude = np.abs(spectrum)
+        rows, cols = magnitude.shape
+        y_grid, x_grid = np.ogrid[:rows, :cols]
+        radius = np.sqrt((y_grid - rows / 2.0) ** 2 + (x_grid - cols / 2.0) ** 2)
+        normalized_radius = radius / max(min(rows, cols) / 2.0, 1.0)
+        high_frequency_energy = float(magnitude[normalized_radius >= 0.45].sum())
+        total_energy = float(magnitude.sum()) + 1e-6
+        high_frequency_ratio = high_frequency_energy / total_energy
+        moire_risk = self._clamp01((high_frequency_ratio - 0.36) / 0.22)
+
+        return self._clamp01((0.45 * moire_risk) + (0.35 * glare_risk) + (0.20 * edge_risk))
+
+    def _clamp01(self, value: float) -> float:
+        return max(0.0, min(float(value), 1.0))
+
+    def _reset_liveness_challenge(self) -> None:
+        self._challenge_user_id = None
+        self._challenge_face_profile_id = None
+        self._challenge_direction = None
+        self._challenge_step = None
+        self._challenge_expires_at = 0.0
+
+    def _should_require_liveness_challenge(
+        self,
+        result: RecognitionResult,
+        liveness_gray_zone: bool,
+        distance: float,
+        timestamp: float,
+    ) -> bool:
+        if not self.liveness_challenge_enabled or result.user_id is None:
+            return False
+        if self._challenge_passed_until.get(result.user_id, 0.0) >= timestamp:
+            return False
+
+        mode = self.liveness_challenge_mode
+        if mode in {"off", "disabled", "false", "none"}:
+            return False
+        if mode == "always":
+            return True
+
+        distance_ratio = distance / max(self.face_distance_threshold, 1e-6)
+        return (
+            bool(liveness_gray_zone)
+            or self._liveness_low_score_count > 0
+            or distance_ratio >= self.liveness_challenge_distance_ratio
+        )
+
+    def _advance_liveness_challenge(
+        self,
+        frame_rgb: np.ndarray,
+        location: tuple[int, int, int, int],
+        user_id: int,
+        face_profile_id: int,
+        timestamp: float,
+    ) -> Optional[str]:
+        if self._challenge_passed_until.get(user_id, 0.0) >= timestamp:
+            return None
+
+        if (
+            self._challenge_user_id != user_id
+            or self._challenge_face_profile_id != face_profile_id
+            or self._challenge_direction not in {"left", "right"}
+            or self._challenge_step not in {"left", "right", "front"}
+        ):
+            return self._start_liveness_challenge(user_id, face_profile_id, timestamp)
+
+        if timestamp > self._challenge_expires_at:
+            self._reset_liveness_challenge()
+            return self._start_liveness_challenge(user_id, face_profile_id, timestamp)
+
+        try:
+            landmarks_list = face_recognition.face_landmarks(frame_rgb, face_locations=[location])
+            if not landmarks_list:
+                return self._current_challenge_reason()
+            pose = self._calculate_pose_metrics(landmarks_list[0])
+        except Exception:
+            return self._current_challenge_reason()
+
+        if self._challenge_step in {"left", "right"}:
+            if self._pose_matches_turn(pose, self._challenge_step):
+                self._challenge_step = "front"
+                return "liveness_challenge_front"
+            return self._current_challenge_reason()
+
+        if self._challenge_step == "front":
+            if pose.yaw_offset <= self.liveness_challenge_front_yaw_max:
+                self._challenge_passed_until[user_id] = timestamp + self.liveness_challenge_pass_seconds
+                self._reset_liveness_challenge()
+                return None
+            return "liveness_challenge_front"
+
+        return self._start_liveness_challenge(user_id, face_profile_id, timestamp)
+
+    def _start_liveness_challenge(self, user_id: int, face_profile_id: int, timestamp: float) -> str:
+        direction = random.choice(("left", "right"))
+        self._challenge_user_id = user_id
+        self._challenge_face_profile_id = face_profile_id
+        self._challenge_direction = direction
+        self._challenge_step = direction
+        self._challenge_expires_at = timestamp + self.liveness_challenge_ttl_seconds
+        return self._current_challenge_reason()
+
+    def _current_challenge_reason(self) -> str:
+        if self._challenge_step == "left":
+            return "liveness_challenge_turn_left"
+        if self._challenge_step == "right":
+            return "liveness_challenge_turn_right"
+        return "liveness_challenge_front"
+
+    def _pose_matches_turn(self, pose: PoseSummary, direction: str) -> bool:
+        if abs(pose.signed_yaw) > self.liveness_challenge_side_yaw_max:
+            return False
+        if direction == "left":
+            return pose.signed_yaw <= -self.liveness_challenge_side_yaw_min
+        if direction == "right":
+            return pose.signed_yaw >= self.liveness_challenge_side_yaw_min
+        return False
 
     def _normalize_frame(self, frame_bgr: np.ndarray) -> np.ndarray:
         frame = frame_bgr

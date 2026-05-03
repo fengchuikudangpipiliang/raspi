@@ -659,9 +659,27 @@ class VideoCamera:
             }
         if result.reason == "liveness_uncertain":
             return {
-                "label": "活体重试",
-                "detail": "请保持正脸并稍微稳定一下",
+                "label": "正在确认",
+                "detail": "请保持在画面中央",
                 "percent": 30,
+            }
+        if result.reason == "liveness_challenge_turn_left":
+            return {
+                "label": "向左转头",
+                "detail": "轻微转头后再回正",
+                "percent": 55,
+            }
+        if result.reason == "liveness_challenge_turn_right":
+            return {
+                "label": "向右转头",
+                "detail": "轻微转头后再回正",
+                "percent": 55,
+            }
+        if result.reason == "liveness_challenge_front":
+            return {
+                "label": "回到正脸",
+                "detail": "请重新正对摄像头",
+                "percent": 72,
             }
         if result.reason == "liveness_face_crop_failed":
             return {

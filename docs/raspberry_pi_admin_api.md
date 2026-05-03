@@ -2639,3 +2639,45 @@ Windows 管理端暂时不需要修改请求代码。
 - 屏幕重放风险分
 - 是否连续低分
 - 最终活体判定原因
+
+#### 15.26 2026-05-03 人脸识别后端升级说明
+
+这一节记录 2026-05-03 新增的人脸识别后端升级。
+
+##### 15.26.1 树莓派侧做了什么
+
+终端识别新增 OpenCV 官方链路：
+
+`YuNet 人脸检测 -> SFace 对齐与特征提取 -> 余弦相似度匹配`
+
+新增配置项：
+
+- `recognition_model`
+- `face_yunet_model_path`
+- `face_sface_model_path`
+- `face_yunet_score_threshold`
+- `face_yunet_nms_threshold`
+- `face_yunet_top_k`
+- `face_sface_cosine_threshold`
+
+当前默认：
+
+- `recognition_model = auto`
+
+行为：
+
+- YuNet/SFace 模型文件存在时，树莓派优先使用 `opencv_sface`
+- 模型文件不存在时，自动回退到原来的 `face_recognition/dlib`
+- 这个改动不改变 Windows 管理端接口路径
+
+##### 15.26.2 Windows 管理端需要怎么改
+
+这次没有新增 Windows 专用接口，也没有改变现有接口返回结构。
+
+Windows 管理端暂时不需要修改请求代码。
+
+如果后续要展示树莓派当前实际使用的识别后端，可以再扩展设备信息接口，增加类似字段：
+
+- `recognition_backend`
+- `recognition_backend_available`
+- `recognition_backend_error`

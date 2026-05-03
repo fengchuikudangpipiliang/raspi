@@ -2372,3 +2372,81 @@ Windows 管理端应使用 `snapshot_available` 控制“查看快照”按钮�
 这次没有新增 Windows 专用接口。
 
 活体融合发生在树莓派终端本地识别流程中。后续如果要让 Windows 端查看某次签到的活体分数、屏幕风险或判定原因，再追加新的审计字段。
+
+## 二十二、2026-05-03 人脸识别后端升级：YuNet + SFace
+
+这一节记录 2026-05-03 新增的识别后端升级。
+
+### 1. 当前旧识别方式
+
+原来的终端识别方式是：
+
+`face_recognition/dlib -> 128维人脸编码 -> 与库中所有已审核人脸逐个计算距离 -> 取最近结果`
+
+这个方式能用，但对侧脸、低清、遮挡、现场光线变化不算现代方案。
+
+### 2. 新增识别后端
+
+现在新增 OpenCV 官方链路：
+
+`YuNet 人脸检测 -> SFace 对齐与特征提取 -> 余弦相似度匹配`
+
+配置项：
+
+- `recognition_model = auto`
+- `face_yunet_model_path`
+- `face_sface_model_path`
+- `face_yunet_score_threshold`
+- `face_yunet_nms_threshold`
+- `face_yunet_top_k`
+- `face_sface_cosine_threshold`
+
+行为：
+
+- 如果 YuNet/SFace 模型文件存在，系统优先使用 `opencv_sface`
+- 如果模型文件不存在，系统自动回退到原来的 `face_recognition/dlib`
+- 这样现场服务不会因为模型没下载而启动失败
+
+### 3. 模型下载命令
+
+在项目根目录执行：
+
+```bash
+cd /home/luck/face3
+mkdir -p third_party/opencv_zoo
+curl -L -o third_party/opencv_zoo/face_detection_yunet_2023mar.onnx \
+  https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
+curl -L -o third_party/opencv_zoo/face_recognition_sface_2021dec.onnx \
+  https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
+```
+
+如果树莓派访问 GitHub 也不稳定，可以改用 jsDelivr 镜像：
+
+```bash
+cd /home/luck/face3
+mkdir -p third_party/opencv_zoo
+curl -L -o third_party/opencv_zoo/face_detection_yunet_2023mar.onnx \
+  https://cdn.jsdelivr.net/gh/opencv/opencv_zoo@main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
+curl -L -o third_party/opencv_zoo/face_recognition_sface_2021dec.onnx \
+  https://cdn.jsdelivr.net/gh/opencv/opencv_zoo@main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
+```
+
+下载完成后重启服务即可。`recognition_model = auto` 会自动切到 `opencv_sface`。
+
+### 4. 关于检索速度
+
+当前用户规模下，仍然是逐个向量比对。
+
+原因是：
+
+- 每个人脸特征只有几百维
+- 几百到几千人逐个算余弦相似度很快
+- 真正耗时的是人脸检测、对齐、特征提取和活体判断
+
+如果后续人数达到上万，再考虑接 FAISS/HNSW 这类向量索引。
+
+### 5. 活体增强
+
+考勤端被动活体融合里新增了“包裹人脸的矩形边框”检测，用来提高对纸张照片、手机屏幕边缘的风险感知。
+
+它仍然是低负载信号，只对当前识别帧做轻量边缘/轮廓检测，不进入视频推流线程。

@@ -14,6 +14,7 @@ import cv2
 import numpy as np
 
 from scripts.camera.anti_spoof_service import AntiSpoofService
+from scripts.camera.opencv_sface_service import OpenCVSFaceService
 from scripts.config.config import cfg
 
 # `face_recognition_models` 仍然依赖 `pkg_resources`，在兼容版 setuptools 下会抛出
@@ -182,6 +183,14 @@ class StrictFaceRecognizer:
 
         self.db_path = Path(db_path or cfg.sqlite_path)
         self.face_distance_threshold = float(face_distance_threshold or cfg.face_distance_threshold)
+        self.face_sface_cosine_threshold = float(cfg.face_sface_cosine_threshold)
+        self.recognition_model = str(cfg.recognition_model or "face_recognition").strip().lower()
+        self.sface_service = OpenCVSFaceService() if self.recognition_model in {"auto", "opencv_sface", "sface"} else None
+        self.active_recognition_model = (
+            "opencv_sface"
+            if self.sface_service is not None and self.sface_service.is_available()
+            else "face_recognition"
+        )
         self.match_required_times = max(int(match_required_times or cfg.face_match_required_times), 1)
         self.unknown_face_label = unknown_face_label or cfg.unknown_face_label
         self.detection_scale = min(max(float(detection_scale), 0.20), 1.0)
@@ -261,8 +270,18 @@ class StrictFaceRecognizer:
         finally:
             connection.close()
 
+        if self.sface_service is not None and self.sface_service.is_available():
+            profiles, encodings = self._load_sface_profiles(rows)
+            if profiles:
+                self.active_recognition_model = "opencv_sface"
+                self.known_profiles = profiles
+                self.known_encodings = encodings
+                self.reset_tracking()
+                return len(self.known_profiles)
+
         profiles: list[KnownFaceProfile] = []
         encodings: list[np.ndarray] = []
+        self.active_recognition_model = "face_recognition"
         for row in rows:
             try:
                 vector = np.asarray(json.loads(row["encoding"]), dtype=np.float32)
@@ -287,6 +306,36 @@ class StrictFaceRecognizer:
         self.known_encodings = encodings
         self.reset_tracking()
         return len(self.known_profiles)
+
+    def _load_sface_profiles(self, rows) -> tuple[list[KnownFaceProfile], list[np.ndarray]]:
+        profiles: list[KnownFaceProfile] = []
+        encodings: list[np.ndarray] = []
+        for row in rows:
+            image_path = self._resolve_local_path(str(row["image_path"]))
+            image_bgr = cv2.imread(str(image_path))
+            if image_bgr is None or image_bgr.size == 0:
+                continue
+            vector = self.sface_service.encode_best_face(image_bgr)
+            if vector is None:
+                continue
+            profiles.append(
+                KnownFaceProfile(
+                    face_profile_id=int(row["face_profile_id"]),
+                    user_id=int(row["user_id"]),
+                    code=str(row["code"]),
+                    name=str(row["name"]),
+                    image_path=str(row["image_path"]),
+                    encoding=vector,
+                )
+            )
+            encodings.append(vector)
+        return profiles, encodings
+
+    def _resolve_local_path(self, path_text: str) -> Path:
+        path = Path(path_text)
+        if path.is_absolute():
+            return path
+        return (Path.cwd() / path).resolve()
 
     def reset_tracking(self) -> None:
         """
@@ -343,19 +392,26 @@ class StrictFaceRecognizer:
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         height, width = frame_bgr.shape[:2]
 
-        small_rgb = cv2.resize(frame_rgb, (0, 0), fx=self.detection_scale, fy=self.detection_scale)
-        try:
-            small_locations = face_recognition.face_locations(
-                small_rgb,
-                model=cfg.face_detection_model,
-            )
-        except Exception:
-            result.reason = "face_detection_failed"
-            self._reset_on_failed_frame()
-            self._last_result = result
-            return result
+        query_encoding = None
+        if self.active_recognition_model == "opencv_sface":
+            sface_candidates = self.sface_service.detect_and_encode(frame_bgr)
+            locations = [candidate.location for candidate in sface_candidates]
+            if len(sface_candidates) == 1:
+                query_encoding = sface_candidates[0].encoding
+        else:
+            small_rgb = cv2.resize(frame_rgb, (0, 0), fx=self.detection_scale, fy=self.detection_scale)
+            try:
+                small_locations = face_recognition.face_locations(
+                    small_rgb,
+                    model=cfg.face_detection_model,
+                )
+            except Exception:
+                result.reason = "face_detection_failed"
+                self._reset_on_failed_frame()
+                self._last_result = result
+                return result
+            locations = [self._scale_location(location) for location in small_locations]
 
-        locations = [self._scale_location(location) for location in small_locations]
         result.face_count = len(locations)
         if not locations:
             result.reason = "no_face"
@@ -379,7 +435,7 @@ class StrictFaceRecognizer:
 
         face_roi = self._extract_face_roi(frame_bgr, location)
         liveness_result = self.liveness_service.analyze_face(face_roi)
-        replay_risk_score = self._estimate_replay_risk_score(face_roi)
+        replay_risk_score = self._estimate_replay_risk_score(frame_bgr, face_roi, location)
         liveness_summary = self._add_liveness_sample(timestamp, liveness_result, replay_risk_score)
         result.liveness_checked = liveness_result.checked
         result.liveness_passed = liveness_result.passed
@@ -391,33 +447,30 @@ class StrictFaceRecognizer:
         result.liveness_window_real_score = liveness_summary.avg_real_score
         self._liveness_low_score_count = liveness_summary.low_score_count
 
-        encodings = face_recognition.face_encodings(
-            frame_rgb,
-            known_face_locations=[location],
-            num_jitters=1,
-            model="small",
-        )
-        if not encodings:
-            result.reason = "face_encoding_failed"
-            self._reset_on_failed_frame()
-            self._last_result = result
-            return result
+        if query_encoding is None:
+            encodings = face_recognition.face_encodings(
+                frame_rgb,
+                known_face_locations=[location],
+                num_jitters=1,
+                model="small",
+            )
+            if not encodings:
+                result.reason = "face_encoding_failed"
+                self._reset_on_failed_frame()
+                self._last_result = result
+                return result
+            query_encoding = encodings[0]
 
-        query_encoding = encodings[0]
-        distances = face_recognition.face_distance(self.known_encodings, query_encoding)
-        best_index = int(np.argmin(distances))
-        best_distance = float(distances[best_index])
+        best_index, best_distance, second_distance = self._match_known_face(query_encoding)
         result.distance = best_distance
 
-        if best_distance > self.face_distance_threshold:
+        if not self._is_match_accepted(best_distance):
             result.reason = self.unknown_face_label
             self._reset_on_failed_frame()
             self._last_result = result
             return result
 
-        if len(distances) > 1:
-            sorted_distances = np.sort(distances)
-            second_distance = float(sorted_distances[1])
+        if second_distance is not None:
             if second_distance - best_distance < self.ambiguity_margin:
                 result.reason = "ambiguous_match"
                 self._reset_on_failed_frame()
@@ -596,7 +649,12 @@ class StrictFaceRecognizer:
             return "liveness_uncertain"
         return None
 
-    def _estimate_replay_risk_score(self, face_roi: np.ndarray) -> float:
+    def _estimate_replay_risk_score(
+        self,
+        frame_bgr: np.ndarray,
+        face_roi: np.ndarray,
+        location: tuple[int, int, int, int],
+    ) -> float:
         if face_roi is None or not isinstance(face_roi, np.ndarray) or face_roi.size == 0:
             return 0.0
 
@@ -625,11 +683,58 @@ class StrictFaceRecognizer:
         total_energy = float(magnitude.sum()) + 1e-6
         high_frequency_ratio = high_frequency_energy / total_energy
         moire_risk = self._clamp01((high_frequency_ratio - 0.36) / 0.22)
+        rectangle_risk = 1.0 if self._detect_face_enclosing_rectangle(frame_bgr, location) else 0.0
 
-        return self._clamp01((0.45 * moire_risk) + (0.35 * glare_risk) + (0.20 * edge_risk))
+        return self._clamp01((0.35 * moire_risk) + (0.25 * glare_risk) + (0.15 * edge_risk) + (0.25 * rectangle_risk))
 
     def _clamp01(self, value: float) -> float:
         return max(0.0, min(float(value), 1.0))
+
+    def _detect_face_enclosing_rectangle(self, frame_bgr: np.ndarray, location: tuple[int, int, int, int]) -> bool:
+        height, width = frame_bgr.shape[:2]
+        top, right, bottom, left = location
+        face_width = max(right - left, 1)
+        face_height = max(bottom - top, 1)
+        image_area = max(width * height, 1)
+
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        edges = cv2.Canny(blurred, 60, 160)
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < image_area * 0.035:
+                continue
+
+            perimeter = cv2.arcLength(contour, True)
+            if perimeter <= 0:
+                continue
+
+            polygon = cv2.approxPolyDP(contour, 0.03 * perimeter, True)
+            if len(polygon) < 4 or len(polygon) > 6:
+                continue
+
+            x, y, rect_width, rect_height = cv2.boundingRect(polygon)
+            if rect_width <= 0 or rect_height <= 0:
+                continue
+
+            if rect_width < face_width * 1.05 or rect_height < face_height * 1.05:
+                continue
+            if rect_width > face_width * 3.4 or rect_height > face_height * 3.8:
+                continue
+            if x <= width * 0.02 or y <= height * 0.02:
+                continue
+            if x + rect_width >= width * 0.98 or y + rect_height >= height * 0.98:
+                continue
+            if x > left or y > top or x + rect_width < right or y + rect_height < bottom:
+                continue
+
+            rectangularity = area / max(rect_width * rect_height, 1)
+            if rectangularity >= 0.70:
+                return True
+
+        return False
 
     def _reset_liveness_challenge(self) -> None:
         self._challenge_user_id = None
@@ -763,6 +868,29 @@ class StrictFaceRecognizer:
         image_area = max(width * height, 1)
         return face_area / image_area
 
+    def _match_known_face(self, query_encoding: np.ndarray) -> tuple[int, float, Optional[float]]:
+        if self.active_recognition_model == "opencv_sface":
+            known_matrix = np.asarray(self.known_encodings, dtype=np.float32)
+            query = np.asarray(query_encoding, dtype=np.float32)
+            similarities = known_matrix @ query
+            order = np.argsort(-similarities)
+            best_index = int(order[0])
+            best_distance = float(1.0 - similarities[best_index])
+            second_distance = float(1.0 - similarities[int(order[1])]) if len(order) > 1 else None
+            return best_index, best_distance, second_distance
+
+        distances = face_recognition.face_distance(self.known_encodings, query_encoding)
+        order = np.argsort(distances)
+        best_index = int(order[0])
+        best_distance = float(distances[best_index])
+        second_distance = float(distances[int(order[1])]) if len(order) > 1 else None
+        return best_index, best_distance, second_distance
+
+    def _is_match_accepted(self, best_distance: float) -> bool:
+        if self.active_recognition_model == "opencv_sface":
+            return (1.0 - best_distance) >= self.face_sface_cosine_threshold
+        return best_distance <= self.face_distance_threshold
+
     def _extract_face_roi(self, frame_bgr: np.ndarray, location: tuple[int, int, int, int]) -> np.ndarray:
         top, right, bottom, left = location
         margin_x = int((right - left) * 0.08)
@@ -818,7 +946,11 @@ class StrictFaceRecognizer:
         return (float(sum(xs) / len(xs)), float(sum(ys) / len(ys)))
 
     def _distance_to_confidence(self, distance: float) -> float:
-        threshold = max(self.face_distance_threshold, 1e-6)
+        threshold = (
+            max(1.0 - self.face_sface_cosine_threshold, 1e-6)
+            if self.active_recognition_model == "opencv_sface"
+            else max(self.face_distance_threshold, 1e-6)
+        )
         raw = 1.0 - (distance / threshold)
         return max(0.0, min(raw, 1.0))
 

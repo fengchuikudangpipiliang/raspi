@@ -14,7 +14,7 @@
             </div>
             <div class="glass-chip">
                 <i class="bi bi-geo-alt"></i>
-                <span>{{ data.site_name }}</span>
+                <span id="terminal-site-name">{{ data.site_name }}</span>
             </div>
         </div>
 
@@ -55,7 +55,7 @@
                             <span>识别提示</span>
                             <i class="bi bi-stars"></i>
                         </div>
-                        <div class="d-grid gap-3">
+                        <div class="d-grid gap-3" id="terminal-tips">
                             {% for tip in data.tips %}
                             <div class="instruction-item">
                                 <span class="instruction-index">0{{ loop.index }}</span>
@@ -65,31 +65,21 @@
                         </div>
                     </section>
 
-                    {# 右侧第二块：展示今日签到概况，增强终端的信息反馈感。 #}
+                    {# 右侧第二块：展示今日签到概况，数据来自本地数据库。 #}
                     <section class="info-card">
                         <div class="section-title">
                             <span>今日概况</span>
                             <i class="bi bi-bar-chart"></i>
                         </div>
-                        <div class="row g-3">
+                        <div class="row g-3" id="terminal-today-stats">
+                            {% for stat in data.today_stats %}
                             <div class="col-4">
-                                <div class="mini-stat">
-                                    <strong>{{ data.today_summary.checked_in }}</strong>
-                                    <span>已签到</span>
+                                <div class="mini-stat{% if stat.alert %} alert{% endif %}">
+                                    <strong>{{ stat.value }}</strong>
+                                    <span>{{ stat.label }}</span>
                                 </div>
                             </div>
-                            <div class="col-4">
-                                <div class="mini-stat">
-                                    <strong>{{ data.today_summary.pending }}</strong>
-                                    <span>待签到</span>
-                                </div>
-                            </div>
-                            <div class="col-4">
-                                <div class="mini-stat alert">
-                                    <strong>{{ data.today_summary.late }}</strong>
-                                    <span>迟到</span>
-                                </div>
-                            </div>
+                            {% endfor %}
                         </div>
                     </section>
 
@@ -99,7 +89,7 @@
                             <span>现场公告</span>
                             <i class="bi bi-megaphone"></i>
                         </div>
-                        <div class="announcement-list">
+                        <div class="announcement-list" id="terminal-announcements">
                             {% for item in data.announcements %}
                             <div class="announcement-item">{{ item }}</div>
                             {% endfor %}
@@ -119,13 +109,19 @@
     const terminalProgressLabel = document.getElementById("terminal-progress-label");
     const terminalProgressDetail = document.getElementById("terminal-progress-detail");
     const terminalProgressFill = document.getElementById("terminal-progress-fill");
+    const terminalSiteName = document.getElementById("terminal-site-name");
+    const terminalTips = document.getElementById("terminal-tips");
+    const terminalTodayStats = document.getElementById("terminal-today-stats");
+    const terminalAnnouncements = document.getElementById("terminal-announcements");
     const videoFeedPath = "{{ url_for('video_feed') }}";
     const healthzPath = "{{ url_for('healthz') }}";
     const terminalStatusUrl = new URL("/api/terminal/status", window.location.href).toString();
+    const terminalScreenDataUrl = new URL("/api/terminal/screen-data", window.location.href).toString();
     const videoFeedUrl = new URL(videoFeedPath, window.location.href).toString();
     const healthzUrl = new URL(healthzPath, window.location.href).toString();
     const backendCheckIntervalMs = 10_000;
     const terminalStatusIntervalMs = 800;
+    const terminalScreenDataIntervalMs = 5_000;
     const backendCheckTimeoutMs = 5_000;
 
     let backendOnline = true;
@@ -165,6 +161,84 @@
         terminalProgressDetail.textContent = progress.detail || "";
         const percent = Math.max(0, Math.min(Number(progress.percent || 0), 100));
         terminalProgressFill.style.width = `${percent}%`;
+    }
+
+    function replaceChildrenSafe(parent, children) {
+        while (parent.firstChild) {
+            parent.removeChild(parent.firstChild);
+        }
+        children.forEach((child) => parent.appendChild(child));
+    }
+
+    function renderTerminalTips(tips) {
+        if (!Array.isArray(tips)) {
+            return;
+        }
+        const nodes = tips.map((tip, index) => {
+            const item = document.createElement("div");
+            item.className = "instruction-item";
+
+            const badge = document.createElement("span");
+            badge.className = "instruction-index";
+            badge.textContent = String(index + 1).padStart(2, "0");
+
+            const text = document.createElement("p");
+            text.className = "mb-0";
+            text.textContent = tip;
+
+            item.appendChild(badge);
+            item.appendChild(text);
+            return item;
+        });
+        replaceChildrenSafe(terminalTips, nodes);
+    }
+
+    function renderTodayStats(stats) {
+        if (!Array.isArray(stats)) {
+            return;
+        }
+        const nodes = stats.map((stat) => {
+            const column = document.createElement("div");
+            column.className = "col-4";
+
+            const card = document.createElement("div");
+            card.className = stat.alert ? "mini-stat alert" : "mini-stat";
+
+            const value = document.createElement("strong");
+            value.textContent = String(stat.value ?? 0);
+
+            const label = document.createElement("span");
+            label.textContent = stat.label || "";
+
+            card.appendChild(value);
+            card.appendChild(label);
+            column.appendChild(card);
+            return column;
+        });
+        replaceChildrenSafe(terminalTodayStats, nodes);
+    }
+
+    function renderAnnouncements(items) {
+        if (!Array.isArray(items)) {
+            return;
+        }
+        const nodes = items.map((item) => {
+            const element = document.createElement("div");
+            element.className = "announcement-item";
+            element.textContent = item;
+            return element;
+        });
+        replaceChildrenSafe(terminalAnnouncements, nodes);
+    }
+
+    function updateTerminalScreenData(data) {
+        if (!data) {
+            return;
+        }
+        terminalSiteName.textContent = data.site_name || "未设置";
+        renderTerminalTips(data.tips);
+        renderTodayStats(data.today_stats);
+        renderAnnouncements(data.announcements);
     }
 
     function scheduleVideoRetry() {
@@ -209,6 +283,24 @@
         }
     }
 
+    async function refreshTerminalScreenData() {
+        try {
+            const response = await fetch(`${terminalScreenDataUrl}?t=${Date.now()}`, {
+                cache: "no-store",
+                credentials: "same-origin",
+            });
+            if (!response.ok) {
+                return;
+            }
+            const payload = await response.json();
+            if (payload && payload.data) {
+                updateTerminalScreenData(payload.data);
+            }
+        } catch (error) {
+            // 右侧信息刷新失败时保留当前内容，下一轮再试。
+        }
+    }
+
     async function refreshTerminalStatus() {
         try {
             const response = await fetch(`${terminalStatusUrl}?t=${Date.now()}`, {
@@ -242,7 +334,9 @@
     refreshVideoStream();
     checkBackend();
     refreshTerminalStatus();
+    refreshTerminalScreenData();
     window.setInterval(checkBackend, backendCheckIntervalMs);
     window.setInterval(refreshTerminalStatus, terminalStatusIntervalMs);
+    window.setInterval(refreshTerminalScreenData, terminalScreenDataIntervalMs);
 </script>
 {% endblock %}

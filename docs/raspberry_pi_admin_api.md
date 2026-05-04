@@ -2681,3 +2681,66 @@ Windows 管理端暂时不需要修改请求代码。
 - `recognition_backend`
 - `recognition_backend_available`
 - `recognition_backend_error`
+
+#### 15.27 2026-05-03 树莓派本地终端页真实数据说明
+
+这一节记录 2026-05-03 对树莓派本地终端页右侧信息区的调整。
+
+##### 15.27.1 树莓派侧做了什么
+
+终端页不再显示写死的演示数据。
+
+右侧“今日概况”现在来自树莓派本地 SQLite：
+
+- `已签到`：当天已经有考勤记录的去重用户数
+- `未签到`：系统用户总数减去当天已签到用户数
+- `总人数`：当前系统用户总数
+
+右侧“现场公告”现在来自树莓派 `env.json`：
+
+- `attendance_start_time`
+- `attendance_end_time`
+- `device_location`
+- `attendance_snapshot_retention_days`
+
+新增本地终端接口：
+
+```http
+GET /api/terminal/screen-data
+```
+
+该接口只给树莓派本地终端页低频轮询使用，返回结构：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "site_name": "实验室门口",
+    "welcome_title": "请面对摄像头完成签到",
+    "welcome_text": "将面部保持在取景框中央，系统会在识别稳定后自动记录考勤。",
+    "tips": ["保持单人入镜，多人进入画面时系统会暂停签到"],
+    "today_stats": [
+      {"label": "已签到", "value": 12, "alert": false},
+      {"label": "未签到", "value": 3, "alert": true},
+      {"label": "总人数", "value": 15, "alert": false}
+    ],
+    "announcements": [
+      "签到时段：00:00 - 23:59",
+      "设备位置：实验室门口",
+      "签到快照保留：7 天"
+    ]
+  }
+}
+```
+
+##### 15.27.2 Windows 管理端需要怎么改
+
+这次没有改 Windows 管理端正在使用的 `/api/admin/*` 接口，也没有改变已有接口返回结构。
+
+Windows 管理端不需要因为这个终端页调整做代码修改。
+
+如果 Windows 管理端也想复用同样的今日概况，继续调用已有接口即可：
+
+```http
+GET /api/admin/attendance/today-summary
+```

@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from time import time
@@ -18,6 +19,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from scripts.camera.camera import VideoCamera
 from scripts.admin_api import build_admin_api_router
 from scripts.config.config import cfg
+from scripts.database.sqlite_db import AttendanceRepository
 from scripts.database.sqlite_db import init_db
 from scripts.web.liveness import LivenessChallengeService
 from scripts.web.portal_submission_service import PortalAccountService
@@ -34,7 +36,13 @@ funnel_templates = Jinja2Templates(
     ]
 )
 LOCAL_TERMINAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
-LOCAL_TERMINAL_PATHS = {"/", "/video_feed", "/healthz", "/api/terminal/status"}
+LOCAL_TERMINAL_PATHS = {
+    "/",
+    "/video_feed",
+    "/healthz",
+    "/api/terminal/status",
+    "/api/terminal/screen-data",
+}
 PORTAL_PATH_PREFIXES = ("/portal", "/api/portal", "/api/liveness", "/api/submissions")
 ALWAYS_ALLOWED_PREFIXES = ("/static", "/api/admin")
 
@@ -52,6 +60,7 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 
 # 运行期基础服务统一放在入口层初始化，避免每个路由里重复创建。
 camera = VideoCamera()
+terminal_attendance_repo = AttendanceRepository()
 roster_import_service = RosterImportService()
 portal_service = PortalAccountService(roster_import_service=roster_import_service)
 portal_liveness_service = LivenessChallengeService()
@@ -64,29 +73,66 @@ app.include_router(
 )
 
 
-# 终端识别页演示数据。
-USER_SCREEN_DATA = {
-    "site_name": "教学楼 A 栋",
-    "welcome_title": "请面对摄像头完成签到",
-    "welcome_text": "将面部保持在取景框中央，摘下口罩与帽子，系统会在识别稳定后自动记录考勤。",
-    "status_label": "待识别",
-    "status_text": "正在等待清晰人脸进入识别区域",
-    "tips": [
-        "保持正脸，距离摄像头约 40-70 厘米",
-        "请勿多人同时进入识别区",
-        "识别成功后将自动显示签到结果",
-    ],
-    "today_summary": {
-        "checked_in": 128,
-        "pending": 17,
-        "late": 6,
-    },
-    "announcements": [
-        "上午签到时段：07:30 - 09:00",
-        "识别失败请前往管理员处人工登记",
-        "请勿遮挡摄像头与补光灯",
-    ],
-}
+
+def get_terminal_recognition_backend_label() -> str:
+    """
+    读取终端当前实际启用的人脸识别后端。
+    这个值只用于本地终端展示，不影响识别逻辑。
+    """
+    recognizer = getattr(camera, "recognizer", None)
+    backend = getattr(recognizer, "active_recognition_model", "") if recognizer else ""
+    if backend == "opencv_sface":
+        return "YuNet + SFace"
+    if backend == "face_recognition":
+        return "dlib"
+    return "自动选择"
+
+
+def build_user_screen_data() -> dict:
+    """
+    终端识别页数据。
+    右侧概况和公告尽量来自数据库与 env.json，避免页面长期显示演示假数。
+    """
+    today = datetime.now().astimezone().date().isoformat()
+    summary = terminal_attendance_repo.get_attendance_summary(date=today)
+    backend_label = get_terminal_recognition_backend_label()
+    liveness_enabled = bool(cfg.attendance_liveness_enabled)
+    site_name = (cfg.device_location or cfg.device_name or "未设置").strip()
+
+    return {
+        "site_name": site_name,
+        "welcome_title": "请面对摄像头完成签到",
+        "welcome_text": "将面部保持在取景框中央，系统会在识别稳定后自动记录考勤。",
+        "tips": [
+            "保持单人入镜，多人进入画面时系统会暂停签到",
+            f"当前识别后端：{backend_label}",
+            "活体检测已启用" if liveness_enabled else "当前按人脸识别稳定性完成签到",
+        ],
+        "today_stats": [
+            {
+                "label": "已签到",
+                "value": summary["checked_in_users"],
+                "alert": False,
+            },
+            {
+                "label": "未签到",
+                "value": summary["absent_users"],
+                "alert": summary["absent_users"] > 0,
+            },
+            {
+                "label": "总人数",
+                "value": summary["registered_users"],
+                "alert": False,
+            },
+        ],
+        "announcements": [
+            f"签到时段：{cfg.attendance_start_time} - {cfg.attendance_end_time}",
+            f"设备位置：{site_name}",
+            f"签到快照保留：{cfg.attendance_snapshot_retention_days} 天",
+        ],
+    }
+
+
 @app.on_event("startup")
 def startup() -> None:
     """
@@ -193,7 +239,7 @@ def user_screen(request: Request):
         {
             "request": request,
             "page_title": "识别签到",
-            "data": USER_SCREEN_DATA,
+            "data": build_user_screen_data(),
         },
     )
 
@@ -230,6 +276,20 @@ def terminal_status():
         "camera_running": camera.running,
         "progress": camera.get_terminal_progress(),
     }
+
+
+@app.get("/api/terminal/screen-data")
+def terminal_screen_data():
+    """
+    终端页右侧信息接口。
+    数据来自本地数据库和 env.json，前端低频轮询即可。
+    """
+
+    return {
+        "ok": True,
+        "data": build_user_screen_data(),
+    }
+
 
 @app.get("/portal")
 def portal_index(request: Request):

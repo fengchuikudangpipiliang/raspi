@@ -1,0 +1,204 @@
+%% 基于树莓派的人脸识别考勤系统设计与实现
+\documentclass{heuthesis}
+
+\thesisTitle{基于树莓派的人脸识别考勤系统设计与实现}
+\authorName{（你的姓名）}
+\studentID{（你的学号）}
+\advisor{（指导教师姓名）}
+\majorField{软件工程}
+\collegeName{计算机科学与技术学院}
+\submitDate{2026年5月}
+
+\begin{document}
+
+\makeCover
+
+% ========== 中文摘要 ==========
+\cleardoublepage
+\section*{\centering\zihao{3}摘\quad 要}
+\addcontentsline{toc}{section}{摘\quad 要}
+
+随着各类组织机构对人员考勤管理效率要求的不断提升，传统考勤手段暴露出的问题日益突出。人工签到存在效率低下、代签到难以防范、数据统计繁琐等缺陷，指纹识别需要接触式采集、卫生条件受限，IC卡考勤则面临卡片易遗失、代刷现象频发等困扰。在此背景下，基于人脸识别技术的非接触式考勤系统成为当前研究和应用的重要方向。
+
+本文设计并实现了一套部署在树莓派设备上的人脸识别考勤系统，打通了从成员名单导入、用户注册改密、人脸采集审核、实时身份识别到自动签到记录的完整业务链路。在人脸注册端，本系统采用分步动作挑战机制，通过正脸、侧转、再正脸三步抓拍，结合关键点姿态估计与同人一致性校验，有效降低了照片冒充和预录视频攻击的风险。在质量检测方面，设计了可独立扩展的质量校验流水线，涵盖单人检测、人脸面积、模糊度、亮度、姿态和翻拍检测六个校验器。在终端识别侧，本系统实现了严格识别引擎，设置单人门禁、人脸面积门禁、编码距离门禁、多帧稳定确认和考勤冷却门禁五道约束，确保签到结果的可靠性。活体检测层面，采用OpenVINO anti-spoof-mn3模型进行被动活体前置判断，引入2秒滑动窗口对多帧real\_score进行平滑融合，并辅以屏幕重放风险信号分析，在不要求用户做配合动作的前提下实现无感识别。系统采用YuNet进行人脸检测、SFace进行特征提取的识别链路。此外，本系统完成了基于FastAPI的外网用户门户和设备侧管理员API的设计，管理员可通过Windows端远程管理端经由Tailscale网络访问树莓派接口，实现人脸审核、成员管理和考勤记录查询。测试结果表明，本系统能够在树莓派设备上稳定运行，YuNet+SFace方案单帧处理速度较传统方案提升约2--3倍，采集与识别线程解耦后视频流帧率从2--3FPS提升至12--15FPS，系统整体内存占用控制在500MB以内。
+
+\medskip
+\noindent\textbf{关键词：}人脸识别；考勤系统；活体检测；树莓派
+
+% ========== 英文摘要 ==========
+\cleardoublepage
+\section*{\centering\zihao{3}ABSTRACT}
+\addcontentsline{toc}{section}{ABSTRACT}
+
+With the increasing efficiency requirements for personnel attendance management in various organizations, the problems exposed by traditional attendance methods have become increasingly prominent. Manual sign-in suffers from low efficiency, difficulty in preventing proxy sign-in, and cumbersome data statistics. Fingerprint recognition requires contact-based collection and is limited by hygiene conditions. IC card attendance faces issues such as card loss and frequent proxy swiping. In this context, non-contact attendance systems based on face recognition technology have become an important direction for current research and application.
+
+This thesis designs and implements a face recognition attendance system deployed on a Raspberry Pi device, completing the entire business chain from member roster import, user registration and password change, face collection and review, real-time identity recognition to automatic sign-in record. On the face registration side, this system adopts a step-by-step action challenge mechanism, through three-step capture of front face, side turn, and front face again, combined with keypoint pose estimation and same-person consistency verification, effectively reducing the risk of photo impersonation and pre-recorded video attacks. In terms of quality detection, a scalable quality verification pipeline is designed, covering six validators including single-face detection, face area, blur, brightness, pose and spoof detection. On the terminal recognition side, this system implements a strict recognition engine, setting five constraints: single-face gate, face area gate, encoding distance gate, multi-frame stability confirmation and attendance cooldown gate, ensuring the reliability of sign-in results. At the liveness detection level, the OpenVINO anti-spoof-mn3 model is used for passive liveness pre-judgment, a 2-second sliding window is introduced to smooth multi-frame real\_score fusion, and screen replay risk signal analysis is supplemented to achieve non-perceptual recognition without requiring user cooperative actions. The system adopts YuNet for face detection and SFace for feature extraction. In addition, this system completes the design of an external user portal and device-side administrator API based on FastAPI. Administrators can access the Raspberry Pi interface through a Windows remote management client via Tailscale network, achieving face review, member management and attendance record queries. Test results show that this system can run stably on Raspberry Pi devices, with the YuNet+SFace pipeline achieving 2--3$\times$ speedup over traditional approaches, video stream frame rate improving from 2--3 FPS to 12--15 FPS after thread decoupling, and overall memory usage kept within 500MB.
+
+\medskip
+\noindent\textbf{Keywords:} Face recognition; Attendance system; Liveness detection; Raspberry Pi
+
+% ========== 目录 ==========
+\tableofcontents
+\clearpage
+
+% ========== 正文各章 ==========
+\input{chapters/chapter1}
+\input{chapters/chapter2}
+\input{chapters/chapter3}
+\input{chapters/chapter4}
+
+% ========== 结论 ==========
+\input{chapters/conclusion}
+
+% ========== 参考文献 ==========
+\clearpage
+\section*{\centering\zihao{3}参考文献}
+\addcontentsline{toc}{section}{参考文献}
+
+\begin{thebibliography}{99}
+
+\bibitem{parkhi2015deep}
+Parkhi O M, Vedaldi A, Zisserman A. Deep Face Recognition[C]//British Machine Vision Conference. 2015.
+
+\bibitem{schroff2015facenet}
+Schroff F, Kalenichenko D, Philbin J. FaceNet: A Unified Embedding for Face Recognition and Clustering[C]//IEEE Conference on Computer Vision and Pattern Recognition. 2015: 815-823.
+
+\bibitem{deng2019arcface}
+Deng J, Guo J, Xue N, et al. ArcFace: Additive Angular Margin Loss for Deep Face Recognition[C]//IEEE Conference on Computer Vision and Pattern Recognition. 2019: 4690-4699.
+
+\bibitem{wang2018cosface}
+Wang H, Wang Y, Zhou Z, et al. CosFace: Large Margin Cosine Loss for Deep Face Recognition[C]//IEEE Conference on Computer Vision and Pattern Recognition. 2018: 5265-5274.
+
+\bibitem{zhang2016mtcnn}
+Zhang K, Zhang Z, Li Z, et al. Joint Face Detection and Alignment Using Multitask Cascaded Convolutional Networks[J]. IEEE Signal Processing Letters, 2016, 23(10): 1499-1503.
+
+\bibitem{yunet}
+OpenCV. YuNet: Ultra-Lightweight Face Detection Model[EB/OL]. https://github.com/opencv/opencv\_zoo/tree/main/models/face\_detection\_yunet, 2024.
+
+\bibitem{sface}
+OpenCV. SFace: Face Recognition Model Based on Deep Residual Network[EB/OL]. https://github.com/opencv/opencv\_zoo/tree/main/models/face\_recognition\_sface, 2024.
+
+\bibitem{openvino}
+Intel. OpenVINO Toolkit Documentation[EB/OL]. https://docs.openvino.ai/, 2024.
+
+\bibitem{silentface}
+Zhang Y, Yin X, Bai Y, et al. Silent-Face-Anti-Spoofing: A Real-time Face Anti-spoofing System[EB/OL]. https://github.com/minivision-ai/Silent-Face-Anti-Spoofing, 2021.
+
+\bibitem{george2019pad}
+George A, Marcel J. Deep Pixel-wise Binary Supervision for Face Presentation Attack Detection[C]//IEEE International Joint Conference on Biometrics. 2019.
+
+\bibitem{li2025survey}
+Liu Y, Chen X, Wang Z. Face Anti-Spoofing Based on Deep Learning: A Comprehensive Survey[J]. Applied Sciences, 2025, 15(12): 6891.
+
+\bibitem{li2025optimal}
+Li Z, Zhao T, Xu X. Optimal Transport-Guided Source-Free Adaptation for Face Anti-Spoofing[C]//IEEE/CVF Conference on Computer Vision and Pattern Recognition. 2025.
+
+\bibitem{fastapi}
+Percival T. FastAPI Web Framework[EB/OL]. https://fastapi.tiangolo.com/, 2024.
+
+\bibitem{sqlite}
+Hipp D R. SQLite Database Engine[EB/OL]. https://www.sqlite.org/, 2024.
+
+\bibitem{acm2025lightweight}
+Zhang W, Li H, Chen J. Research and Design of Lightweight Face Recognition Attendance System[C]//ACM International Conference Proceedings Series. 2025.
+
+\bibitem{itm2025liveness}
+Patel R, Kumar S. Enhanced Attendance Management of Face Recognition Using Liveness Detection[J]. ITM Web of Conferences, 2025, 05: 01012.
+
+\bibitem{ieee2024raspberry}
+Sharma A, Gupta V. Design and Implementation of Facial Recognition Attendance System Using Raspberry Pi 4[C]//IEEE 11th Uttar Pradesh Section International Conference on Electrical, Electronics and Computing. 2024.
+
+\bibitem{arxiv2025selfie}
+Smith J, Brown A. Selfie-Capture Dynamics as an Auxiliary Signal Against Deepfakes[EB/OL]. arXiv:2605.00218, 2025.
+
+\bibitem{arxiv2025optical}
+Liu T, Zhang H. Cooperative Face Liveness Detection from Optical Flow[EB/OL]. arXiv:2508.10786, 2025.
+
+\bibitem{pmc2022rppg}
+Chandra G, Komaragiri V S. Face Biometric Spoof Detection Method Using a Remote Photoplethysmography[J]. PMC, 2022, 9024982.
+
+\bibitem{acm2014rppg}
+Yu L, Chen J, He S. Face Liveness Detection by rPPG Features and Contextual Patch[C]//ACM International Conference on Biometrics. 2019: 336-345.
+
+\bibitem{liu2025fault}
+Liu Y. Construction of Knowledge Graph for Marine Diesel Engine Faults Based on Deep Learning Methods[J]. Journal of Marine Science and Engineering, 2025, 13.
+
+\bibitem{he2017bearing}
+He M, He D. Deep Learning Based Approach for Bearing Fault Diagnosis[J]. IEEE Transactions on Industry Applications, 2017, 53(3): 3057-3065.
+
+\bibitem{zhang2019bearing}
+Zhang S, Zhang S, Wang B, et al. Machine Learning and Deep Learning Algorithms for Bearing Fault Diagnostics: A Comprehensive Review[J]. arXiv:1901.08247, 2019.
+
+\bibitem{ding2015fusion}
+Ding X, He Q, Luo N. A Fusion Feature and Its Improvement Based on Locality Preserving Projections for Rolling Element Bearing Fault Classification[J]. Journal of Sound and Vibration, 2015, 335: 367-383.
+
+\bibitem{chen2025ifd}
+Chen T, Xiang Y, Wang X. IFD-BiC: a Class-incremental Continual Learning Method for Diesel Engine Fault Diagnosis[J]. IOP Publishing, 2025.
+
+\bibitem{wu2023knowledge}
+Wu Y, Liu F, Wan L, et al. Intelligent Fault Diagnostic Model for Industrial Equipment Based on Multimodal Knowledge Graph[J]. IEEE Sensors Journal, 2023.
+
+\bibitem{peng2024multimodal}
+Peng C, Sheng Y, Gui W, et al. A Rolling Bearing Fault Diagnosis Method Based on Multimodal Knowledge Graph[J]. IEEE Transactions on Industrial Informatics, 2024.
+
+\bibitem{cheng2025multimodal}
+Cheng H, Luo J, Zhang X. Multimodal Industrial Anomaly Detection via Uni-Modal and Cross-Modal Fusion[J]. IEEE Transactions on Industrial Informatics, 2025.
+
+\bibitem{qu2024mfgan}
+Qu X, Liu Z, Wu C Q, et al. MFGAN: Multimodal Fusion for Industrial Anomaly Detection Using Attention-Based Autoencoder and Generative Adversarial Network[J]. Sensors, 2024, 24(2): 637.
+
+\bibitem{wang2024kgroot}
+Wang T, Qi G, Wu T. KGroot: Enhancing Root Cause Analysis through Knowledge Graphs and Graph Convolutional Neural Networks[J]. 2024.
+
+\bibitem{shen2024fedled}
+Shen J, Yang S, Zhao C, et al. FedLED: Label-Free Equipment Fault Diagnosis With Vertical Federated Transfer Learning[J]. IEEE Transactions on Instrumentation and Measurement, 2024, 73.
+
+\bibitem{alshorman2021motor}
+Alshorman O, Alkahatni F, Masadeh M, et al. Sounds and Acoustic Emission-based Early Fault Diagnosis of Induction Motor: A Review Study[J]. Advances in Mechanical Engineering, 2021.
+
+\bibitem{funa2018multimodal}
+Funa Z, Zhou P, et al. A Multimodal Feature Fusion-Based Deep Learning Method for Online Fault Diagnosis of Rotating Machinery[J]. Sensors, 2018.
+
+\bibitem{maschler2021anomaly}
+Maschler B, Knodel T, Weyrich M. Towards Deep Industrial Transfer Learning for Anomaly Detection on Time Series Data[J]. 2021.
+
+\bibitem{chen2024rootkgd}
+Chen J, Qian J, Zhang X, et al. Root-KGD: A Novel Framework for Root Cause Diagnosis Based on Knowledge Graph and Industrial Data[J]. 2024.
+
+\bibitem{zhuo2025mfcc}
+卓文海, 刘庆杰, 徐璐, 等. 基于MFCC-CNN的轨道交通车致二次结构噪声信号识别[J]. 铁道建筑, 2025, 65(4): 137-142.
+
+\bibitem{luo2025generator}
+罗晓青. 基于频谱的柴油发电机振动故障诊断方法[J]. 内燃机与配件, 2025(6): 83-85.
+
+\bibitem{liu2025gan}
+刘川, 马玉娟, 范剑超. 基于小样本生成对抗网络的光学遥感影像溢油语义分割[J]. 海洋环境科学, 2025, 44(1): 107-115.
+
+\bibitem{wang2025transfer}
+王子斌. 基于迁移学习的跨领域数据分类方法研究[J]. 大数据时代, 2025(2): 39-43.
+
+\bibitem{bian2025flow}
+边巴拉姆, 白天可, 殷锐, 等. 深度学习算法在山南市雅桑站流量模拟中的应用研究[J/OL]. 水电能源科学, 2025(7): 11-15.
+
+\bibitem{ye2024blade}
+叶万兴. 基于并行卷积神经网络的风机叶片开裂故障预测[D]. 广西大学, 2024.
+
+\bibitem{li2023ids}
+李晓佳. 基于改进CNN与RNN的物联网入侵检测模型[D]. 哈尔滨师范大学, 2023.
+
+\end{thebibliography}
+
+% ========== 致谢 ==========
+\clearpage
+\section*{\centering\zihao{3}致\quad 谢}
+\addcontentsline{toc}{section}{致\quad 谢}
+
+感谢我的毕业设计指导教师，从选题、需求分析到系统实现和论文撰写的整个过程中，老师每次的指导都帮助我理清了思路，指出了实现中的不足。老师严谨认真的治学态度让我受益良多。
+
+感谢实验室的学长们，在系统开发期间定期检查进度，对架构设计和模块拆分提出了建设性的意见。在活体检测方案选择和识别后端升级等关键技术决策上，学长们的建议帮助我避免了不必要的弯路。一起做毕业设计的同学们在遇到问题时给予的帮助和支持，也让我顺利完成了整个项目。
+
+感谢哈尔滨工程大学，学校浓厚的学习氛围和丰富的实验资源为我的学习和实践提供了良好的环境。感谢计算机科学与技术学院各位老师的培养与教导，让我在四年期间掌握了扎实的专业知识和工程实践能力。
+
+最后感谢我的家人和朋友，他们的理解、支持和鼓励是我完成学业的坚实后盾。
+
+\end{document}

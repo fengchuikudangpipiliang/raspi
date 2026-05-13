@@ -1,0 +1,152 @@
+%% 基于树莓派的人脸识别考勤系统设计与实现
+\documentclass{heuthesis}
+
+\thesisTitle{基于树莓派的人脸识别考勤系统设计与实现}
+\authorName{（你的姓名）}
+\studentID{（你的学号）}
+\advisor{（指导教师姓名）}
+\majorField{软件工程}
+\collegeName{计算机科学与技术学院}
+\submitDate{2026年5月}
+
+\newcommand{\runtimeScreenshot}[4]{%
+\begin{figure}[H]
+    \centering
+    \IfFileExists{#1}{%
+        \includegraphics[width=0.92\textwidth]{#1}%
+    }{%
+        \fbox{%
+            \begin{minipage}[c][0.28\textheight][c]{0.86\textwidth}
+                \centering
+                {\zihao{-4}\bfseries 运行截图占位}\\[0.8em]
+                \texttt{#1}
+            \end{minipage}%
+        }%
+    }
+    \caption{#2}
+    \label{#3}
+\end{figure}
+}
+
+\begin{document}
+
+\makeCover
+
+% ========== 中文摘要 ==========
+\cleardoublepage
+\section*{\centering\zihao{3}摘\quad 要}
+\addcontentsline{toc}{section}{摘\quad 要}
+
+随着高校、实验室和企事业单位对人员管理效率与数据可信度要求的提升，人工签到、纸质登记和刷卡考勤在使用过程中暴露出代签难防、统计繁琐、设备依赖明显等问题。人脸识别具有非接触、自然交互和身份介质不易转借等特点，适合用于低成本、轻量化的考勤终端。本文围绕树莓派边缘设备的算力条件，设计并实现了一套基于树莓派的人脸识别考勤系统。
+
+系统采用FastAPI作为后端框架，使用Jinja2模板和Bootstrap构建终端页面与用户门户，采用SQLite保存成员名单、用户、人脸档案、审核记录和考勤流水。系统最终识别链路以OpenCV YuNet模型完成人脸检测，以SFace模型完成人脸特征提取和余弦相似度匹配，并通过OpenVINO加载anti-spoof-mn3模型实现被动活体检测。业务流程方面，系统打通了成员名单导入、用户首次注册改密、动作挑战采集、人脸质量校验、管理员审核、终端实时识别、自动签到和远程管理接口等完整链路。注册端采用正脸、侧转、再正脸的三步动作挑战，并结合关键点姿态估计、同人一致性校验、模糊度检测、亮度检测和翻拍风险检测，保证入库人脸资料的可用性。终端识别端采用采集线程与识别线程解耦的方式，采集线程负责摄像头读帧和MJPEG推流，识别线程以低频处理最新帧，依次经过单人入镜、人脸面积、活体检测、身份匹配、考勤时间窗和重复签到冷却等门禁后写入考勤记录。
+
+测试结果表明，本系统能够完成从用户注册到终端签到的端到端流程。系统在测试库中完成成员名单、审核通过人脸档案和考勤记录的持久化管理；终端识别配置为1280$\times$720分辨率、15FPS采集和5FPS识别，能够满足实验室门口等小规模考勤场景的实时性需求。系统的模块化设计便于后续扩展多设备协同、考勤规则配置和统计报表等功能。
+
+\medskip
+\noindent\textbf{关键词：}人脸识别，树莓派，考勤系统，活体检测，边缘计算
+
+% ========== 英文摘要 ==========
+\cleardoublepage
+\section*{\centering\zihao{3}ABSTRACT}
+\addcontentsline{toc}{section}{ABSTRACT}
+
+With the increasing demand for efficient personnel management and reliable attendance data in universities, laboratories, and enterprises, manual sign-in, paper-based registration, and card-based attendance expose problems such as proxy attendance, cumbersome statistics, and dependence on physical media. Face recognition provides non-contact interaction and identity verification without transferable media, making it suitable for lightweight and low-cost attendance terminals. This thesis designs and implements a Raspberry Pi based face recognition attendance system under the computing constraints of edge devices.
+
+The system uses FastAPI as the backend framework, Jinja2 templates and Bootstrap for the terminal page and user portal, and SQLite to store roster members, users, face profiles, review records, and attendance records. The final recognition pipeline uses the OpenCV YuNet model for face detection, the SFace model for face feature extraction and cosine similarity matching, and the OpenVINO anti-spoof-mn3 model for passive liveness detection. In terms of business workflow, the system supports roster import, first-time registration and password change, action-challenge face capture, face quality validation, administrator review, terminal recognition, automatic attendance recording, and remote management APIs. The registration side adopts a three-step action challenge consisting of front face, side turn, and front face again. It combines keypoint-based pose estimation, same-person consistency verification, blur detection, brightness detection, and presentation attack risk detection to ensure the usability of enrolled face profiles. On the terminal side, camera capture and recognition are decoupled into two threads. The capture thread reads frames and provides MJPEG streaming, while the recognition thread processes only the latest frame at a lower frequency. Attendance records are written only after passing gates including single-face detection, face area validation, liveness detection, identity matching, attendance time window, and duplicate check-in cooldown.
+
+Test results show that the system can complete the end-to-end process from user registration to terminal check-in. The test database stores roster records, approved face profiles, and attendance records persistently. The terminal is configured with 1280$\times$720 resolution, 15 FPS capture, and 5 FPS recognition, which satisfies the real-time requirements of small-scale attendance scenarios such as laboratory entrances. The modular design also supports future extensions such as multi-device collaboration, configurable attendance rules, and statistical reports.
+
+\medskip
+\noindent\textbf{Keywords:} Face recognition, Raspberry Pi, attendance system, liveness detection, edge computing
+
+% ========== 目录 ==========
+\tableofcontents
+\clearpage
+
+% ========== 正文 ==========
+\input{chapters/chapter1}
+\input{chapters/chapter2}
+\input{chapters/chapter3}
+\input{chapters/chapter4}
+
+% ========== 结论 ==========
+\input{chapters/conclusion}
+
+% ========== 参考文献 ==========
+\clearpage
+\section*{\centering\zihao{3}参考文献}
+\addcontentsline{toc}{section}{参考文献}
+
+\begin{thebibliography}{99}
+
+\bibitem{schroff2015facenet}
+Schroff F, Kalenichenko D, Philbin J. FaceNet: A Unified Embedding for Face Recognition and Clustering[C]//Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition. 2015: 815-823. DOI: 10.1109/CVPR.2015.7298682. \url{https://openaccess.thecvf.com/content_cvpr_2015/html/Schroff_FaceNet_A_Unified_2015_CVPR_paper.html}
+
+\bibitem{deng2019arcface}
+Deng J, Guo J, Xue N, Zafeiriou S. ArcFace: Additive Angular Margin Loss for Deep Face Recognition[C]//Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition. 2019: 4690-4699. DOI: 10.1109/CVPR.2019.00482. \url{https://openaccess.thecvf.com/content_CVPR_2019/html/Deng_ArcFace_Additive_Angular_Margin_Loss_for_Deep_Face_Recognition_CVPR_2019_paper.html}
+
+\bibitem{wang2018cosface}
+Wang H, Wang Y, Zhou Z, et al. CosFace: Large Margin Cosine Loss for Deep Face Recognition[C]//Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition. 2018: 5265-5274. DOI: 10.1109/CVPR.2018.00552. \url{https://openaccess.thecvf.com/content_cvpr_2018/html/Wang_CosFace_Large_Margin_CVPR_2018_paper.html}
+
+\bibitem{zhang2016mtcnn}
+Zhang K, Zhang Z, Li Z, Qiao Y. Joint Face Detection and Alignment Using Multitask Cascaded Convolutional Networks[J]. IEEE Signal Processing Letters, 2016, 23(10): 1499-1503. DOI: 10.1109/LSP.2016.2603342. \url{https://doi.org/10.1109/LSP.2016.2603342}
+
+\bibitem{wu2023yunet}
+Wu W, Peng H, Yu S. YuNet: A Tiny Millisecond-level Face Detector[J]. Machine Intelligence Research, 2023, 20(5): 656-665. DOI: 10.1007/s11633-023-1423-y. \url{https://link.springer.com/article/10.1007/s11633-023-1423-y}
+
+\bibitem{zhong2021sface}
+Zhong Y, Deng W, Hu J, Zhao D, Li X, Wen D. SFace: Sigmoid-Constrained Hypersphere Loss for Robust Face Recognition[J]. IEEE Transactions on Image Processing, 2021, 30: 2587-2598. DOI: 10.1109/TIP.2020.3048632. \url{https://doi.org/10.1109/TIP.2020.3048632}
+
+\bibitem{opencv_dnn_face}
+OpenCV. DNN-based Face Detection And Recognition[EB/OL]. \url{https://docs.opencv.org/4.x/d0/dd4/tutorial_dnn_face.html}
+
+\bibitem{yu2023fas}
+Yu Z, Qin Y, Li X, Zhao C, Lei Z, Zhao G. Deep Learning for Face Anti-Spoofing: A Survey[J]. IEEE Transactions on Pattern Analysis and Machine Intelligence, 2023, 45(5): 5609-5631. DOI: 10.1109/TPAMI.2022.3215850. \url{https://pubmed.ncbi.nlm.nih.gov/36260579/}
+
+\bibitem{fastapi}
+FastAPI. Features[EB/OL]. \url{https://fastapi.tiangolo.com/features/}
+
+\bibitem{sqlite}
+SQLite. About SQLite[EB/OL]. \url{https://www.sqlite.org/about.html}
+
+\bibitem{tailscale}
+Tailscale. What is Tailscale?[EB/OL]. \url{https://tailscale.com/docs/concepts/what-is-tailscale}
+
+\bibitem{raspberrypi_camera}
+Raspberry Pi Foundation. Camera software[EB/OL]. \url{https://www.raspberrypi.com/documentation/computers/camera_software.html}
+
+\bibitem{opencv_facedetectoryn}
+OpenCV. cv::FaceDetectorYN Class Reference[EB/OL]. \url{https://docs.opencv.org/4.x/df/d20/classcv_1_1FaceDetectorYN.html}
+
+\bibitem{opencv_facerecognizersf}
+OpenCV. cv::FaceRecognizerSF Class Reference[EB/OL]. \url{https://docs.opencv.org/4.x/da/d09/classcv_1_1FaceRecognizerSF.html}
+
+\bibitem{openvino}
+Intel. OpenVINO Documentation[EB/OL]. \url{https://docs.openvino.ai/}
+
+\bibitem{openvino_anti_spoof}
+Intel. anti-spoof-mn3 Model Documentation[EB/OL]. \url{https://docs.openvino.ai/2023.3/omz_models_model_anti_spoof_mn3.html}
+
+\bibitem{jinja}
+Pallets Projects. Jinja Documentation[EB/OL]. \url{https://jinja.palletsprojects.com/en/stable/}
+
+\bibitem{bootstrap}
+Bootstrap Team. Get started with Bootstrap[EB/OL]. \url{https://getbootstrap.com/docs/5.3/getting-started/introduction/}
+
+\end{thebibliography}
+
+% ========== 致谢 ==========
+\clearpage
+\section*{\centering\zihao{3}致\quad 谢}
+\addcontentsline{toc}{section}{致\quad 谢}
+
+感谢我的毕业设计指导教师在选题、系统设计、代码实现和论文撰写过程中的耐心指导。老师严谨的治学态度和清晰的问题分析方式，使我在系统开发过程中能够不断修正思路，逐步完成从课题分析到系统实现与测试的完整实践。
+
+感谢实验室的学长和同学们在项目推进过程中给予的帮助。在树莓派部署、摄像头调试、用户注册流程和论文结构梳理等环节，大家的建议帮助我及时发现问题并完成改进。
+
+感谢哈尔滨工程大学和计算机科学与技术学院为本科阶段学习提供的良好环境。四年的学习让我逐步掌握软件工程、数据库、Web开发和人工智能应用相关知识，也让我理解到工程系统不仅要能运行，更要能长期维护和持续演进。
+
+最后，感谢家人和朋友一直以来的支持与鼓励。正是他们的理解和陪伴，让我能够专注完成毕业设计和论文写作。
+
+\end{document}

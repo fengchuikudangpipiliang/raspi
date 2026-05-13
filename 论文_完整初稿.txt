@@ -1,0 +1,465 @@
+基于树莓派的人脸识别考勤系统设计与实现
+
+摘  要
+
+随着各类组织机构对人员考勤管理效率要求的不断提升，传统考勤手段暴露出的问题日益突出。人工签到存在效率低下、代签到难以防范、数据统计繁琐等缺陷，指纹识别需要接触式采集、卫生条件受限，IC卡考勤则面临卡片易遗失、代刷现象频发等困扰。在此背景下，基于人脸识别技术的非接触式考勤系统成为当前研究和应用的重要方向。
+
+本文设计并实现了一套部署在树莓派设备上的人脸识别考勤系统，打通了从成员名单导入、用户注册改密、人脸采集审核、实时身份识别到自动签到记录的完整业务链路。在人脸注册端，本系统采用分步动作挑战机制，通过正脸、侧转、再正脸三步抓拍，结合关键点姿态估计与同人一致性校验，有效降低了照片冒充和预录视频攻击的风险。在质量检测方面，设计了可独立扩展的质量校验流水线，涵盖单人检测、人脸面积、模糊度、亮度、姿态和翻拍检测等多个校验器。在终端识别侧，本系统实现了严格识别引擎，设置单人门禁、人脸面积门禁、编码距离门禁、多帧稳定确认和考勤冷却门禁五道约束，确保签到结果的可靠性。活体检测层面，采用OpenVINO anti-spoof-mn3模型进行被动活体前置判断，引入2秒滑动窗口对多帧real_score进行平滑融合，并辅以屏幕重放风险信号分析，在不要求用户做配合动作的前提下实现无感识别。系统采用YuNet进行人脸检测、SFace进行特征提取的OpenCV官方识别链路，同时保留原有face_recognition/dlib方案作为自动回退。此外，本系统完成了基于FastAPI的外网用户门户和设备侧管理员API的设计，管理员可通过Windows端远程管理端经由Tailscale网络访问树莓派接口，实现人脸审核、成员管理和考勤记录查询。测试结果表明，本系统能够在树莓派设备上稳定运行，完成从注册到考勤的端到端业务流程。
+
+关键词：人脸识别；考勤系统；活体检测；树莓派
+
+ABSTRACT
+
+With the increasing efficiency requirements for personnel attendance management in various organizations, the problems exposed by traditional attendance methods have become increasingly prominent. Manual sign-in suffers from low efficiency, difficulty in preventing proxy sign-in, and cumbersome data statistics. Fingerprint recognition requires contact-based collection and is limited by hygiene conditions. IC card attendance faces issues such as card loss and frequent proxy swiping. In this context, non-contact attendance systems based on face recognition technology have become an important direction for current research and application.
+
+This thesis designs and implements a face recognition attendance system deployed on a Raspberry Pi device, completing the entire business chain from member roster import, user registration and password change, face collection and review, real-time identity recognition to automatic sign-in record. On the face registration side, this system adopts a step-by-step action challenge mechanism, through three-step capture of front face, side turn, and front face again, combined with keypoint pose estimation and same-person consistency verification, effectively reducing the risk of photo impersonation and pre-recorded video attacks. In terms of quality detection, a scalable quality verification pipeline is designed, covering multiple validators including single-face detection, face area, blur, brightness, pose and spoof detection. On the terminal recognition side, this system implements a strict recognition engine, setting five constraints: single-face gate, face area gate, encoding distance gate, multi-frame stability confirmation and attendance cooldown gate, ensuring the reliability of sign-in results. At the liveness detection level, the OpenVINO anti-spoof-mn3 model is used for passive liveness pre-judgment, a 2-second sliding window is introduced to smooth multi-frame real_score fusion, and screen replay risk signal analysis is supplemented to achieve non-perceptual recognition without requiring user cooperative actions. The system uses YuNet for face detection and SFace for feature extraction as the OpenCV official recognition pipeline, while retaining the original face_recognition/dlib scheme as automatic fallback. In addition, this system completes the design of an external user portal and device-side administrator API based on FastAPI. Administrators can access the Raspberry Pi interface through a Windows remote management client via Tailscale network, achieving face review, member management and attendance record queries. Test results show that this system can run stably on Raspberry Pi devices, completing the end-to-end business process from registration to attendance.
+
+Keywords: Face recognition; Attendance system; Liveness detection; Raspberry Pi
+第1章 绪论
+
+1.1 研究背景与意义
+
+考勤管理是各类企事业单位、学校等组织日常运营中的基础性工作。长期以来，人员考勤主要依赖人工签到、纸质登记、IC卡刷卡和指纹采集等手段。人工签到和纸质登记方式存在效率低下、数据易被篡改、统计工作繁琐等问题，面对较大规模人员群体时，排队等候时间显著增加，给使用者带来不便。IC卡考勤虽然在一定程度上提升了签到效率，但卡片遗失、损坏、遗忘等现象频发，且代刷卡行为难以有效防范，管理人员事后核查成本较高。指纹考勤需要接触式采集，在公共卫生意识日益提高的背景下，多人共用同一采集设备存在卫生隐患，同时指纹传感器对采集角度和手指状态较为敏感，在干燥、潮湿或磨损情况下识别率明显下降。
+
+人脸识别技术因其非接触、自然交互、难以代刷等特点，逐渐成为考勤领域的研究热点和应用方向。基于摄像头采集的人脸图像，系统可以在用户无感知的情况下完成身份确认，无需携带额外介质，也不强制要求特定的身体接触。在技术成熟度方面，近年来深度学习驱动的人脸检测和特征提取方法取得了显著进展，在公开数据集上的识别准确率已达到实用级别。与此同时，边缘计算设备的算力也在不断提升，使得在低成本嵌入式设备上运行人脸检测和识别模型成为可能。
+
+树莓派作为一款价格低廉、体积小巧的单板计算机，具备完整的GPIO、USB、网络等接口，运行Linux系统，能够部署Python生态中的深度学习推理框架。将人脸识别考勤系统部署在树莓派上，具有几方面优势。部署成本低，一台树莓派加上USB摄像头即可构成完整的考勤终端，不需要专门的工控机或服务器。本地化部署，数据存储在设备端，不依赖外部云服务，有利于隐私保护。功耗极低，适合长期不间断运行。系统可独立工作，不依赖外部网络，在网络条件不稳定的场所也能正常使用。
+
+本文的研究目标是设计并实现一套部署在树莓派端的人脸识别考勤系统，打通从成员名单导入、用户注册、人脸采集、管理员审核、实时识别到自动签到的完整业务流程。该系统面向真实考勤场景，需要在有限算力下保证识别准确性和响应速度，同时需要防范照片、屏幕翻拍、预录视频等常见攻击手段。系统的实现不仅是对人脸识别技术在考勤场景中的一次完整工程实践，也为低成本边缘设备上运行AI推理任务提供了可参考的方案。
+
+1.2 国内外研究现状
+
+在人脸识别技术方面，国内研究集中在检测精度提升、大规模人脸库检索和复杂场景适应性。传统人脸检测方法如Viola-Jones基于Haar特征的级联分类器在正面光照充足条件下表现尚可，但在侧脸、遮挡和低照度场景下性能急剧下降。基于深度学习的人脸检测方法近年来发展迅速，MTCNN（Multi-task Cascaded Convolutional Networks）通过级联三个阶段网络实现人脸检测和关键点定位，成为业界广泛采用的方案之一。RetinaFace引入单阶段密集人脸检测思路，在WiderFace数据集上取得了领先性能。OpenCV官方推出的YuNet模型则针对端侧部署场景进行了轻量化设计，模型体积小，推理速度快，适合树莓派等算力受限的设备运行。
+
+在人脸特征提取和识别方面，国内学者在ArcFace、CosFace等角度间隔损失函数方面做出了重要贡献，这些方法通过在特征空间中增加类间间隔，显著提升了识别模型的判别能力。FaceNet首次将三元组损失（Triplet Loss）引入人脸识别，直接优化特征向量间的欧氏距离，为后续研究奠定了基础。当前工程实践中，dlib库提供的ResNet-based 128维人脸编码因其简单易用，在中小规模人脸库场景中仍被广泛采用。OpenCV的SFace模型则基于更现代的架构，在跨姿态和跨光照条件下的鲁棒性优于传统的dlib方案。
+
+活体检测技术是防止人脸系统被照片、视频、3D面具等伪造手段欺骗的关键环节。国内研究在活体检测方向呈现从主动到被动、从单帧到多帧融合的发展趋势。主动活体方法要求用户配合完成特定动作，如眨眼、张嘴、转头、摇头等，通过分析动作执行过程中的面部变化判断活体。这类方法安全性较高，但用户体验较差，在高频使用场景中容易引发抵触情绪。被动活体方法无需用户配合，通过分析单帧图像的纹理特征（如摩尔纹、屏幕反光、纸张材质）或生物信号（如rPPG远程光电容积脉搏波）判断活体，用户体验更好，但技术难度更大。当前主流趋势是将主动和被动方法结合使用，在日常场景中以被动检测为主，在可疑情况下触发主动挑战。
+
+在国外研究方面，边缘AI部署是一个活跃的研究方向。NVIDIA Jetson系列、Google Coral和Intel Movidius等边缘推理平台推动了深度学习模型在端侧设备的落地。OpenVINO工具套件针对Intel架构CPU进行了深度优化，使得在树莓派等x86/ARM设备上运行预训练模型成为可能。在人脸反欺骗领域，CVPR 2019和2021的Face Anti-Spoofing挑战赛中涌现了大量优秀方法，包括基于CNN的单帧分类器、基于时序分析的动态方法以及多模态融合方案。Silent-Face-Anti-Spoofing等开源项目提供了可在端侧运行的轻量级反欺骗模型，为工业应用提供了基础工具。
+
+当前研究趋势体现在以下几个方面。端侧轻量化模型的持续优化，通过模型剪枝、量化和知识蒸馏等手段降低模型推理的计算开销和内存占用。被动活体检测的深入研究，利用多帧时序信息和微弱生理信号提升检测准确率，减少对用户配合的依赖。多模态融合技术的应用，结合红外、深度、RGB等多种传感器信息提升活体检测的鲁棒性。边缘-云协同架构的探索，将轻量模型部署在端侧进行初步判断，复杂场景交由云端进行二次确认，平衡准确性和响应速度。
+
+1.3 主要工作内容
+
+本文在对当前人脸识别技术和考勤系统架构的学习分析基础上，选择Python作为开发语言，FastAPI作为Web框架，SQLite作为本地数据库，在树莓派设备上实现了一套完整的人脸识别考勤系统。本文的主要工作内容包括以下几个方面。
+
+（1）人脸注册流的设计与实现。完成从本地CSV名单导入、用户首次注册改密、正式登录、动作挑战人脸采集到质量校验入库的完整注册链路。设计了基于OpenCV landmarks的姿态估计方法，用于判断抓拍图像是否满足正脸或轻微侧转的动作要求。实现了同人一致性校验，确保挑战过程中始终为同一人。设计了纸张和屏幕翻拍检测，降低注册照被伪造的风险。
+
+（2）实时识别考勤流的设计与实现。完成从摄像头实时采集、人脸检测、活体判断、特征提取、身份比签到记录写入的端到端识别链路。设计了严格识别引擎，包含单人检测、人脸面积、编码距离、多帧稳定、时间窗和冷却时间六道门禁。引入OpenVINO anti-spoof-mn3模型进行被动活体前置判断，设计了2秒滑动窗口多帧融合策略，对real_score进行平滑处理，并引入屏幕重放风险信号分析。
+
+（3）识别后端的升级与双后端自动回退。在原有face_recognition/dlib方案基础上，新增OpenCV YuNet检测加SFace特征提取的识别链路，通过配置项recognition_model控制使用哪种后端，当新模型文件不存在时自动回退到旧方案。
+
+（4）用户门户与远程管理接口的设计与实现。完成基于Jinja2模板的外网用户门户页面，包括注册、登录、用户中心和人脸采集页面。实现设备侧管理员API，提供成员管理、人脸审核、考勤记录查询和设备状态监控接口。设计Windows端远程管理系统通过Tailscale网络访问树莓派API的对接方案。
+
+（5）系统测试与调优。对系统的各项功能进行端到端测试，验证注册流程、识别签到、活体判断和审核机制的正确性。在树莓派实际设备上测试识别帧率、活体推理耗时和内存占用，根据实测结果调整识别阈值和线程策略。
+
+1.4 论文结构
+
+本文共分为4章，各章主要内容如下。
+
+第1章为绪论，分析了人脸识别考勤系统的研究背景与意义，对国内外人脸识别技术和活体检测方法的研究现状进行了总结与分析，给出了本文的主要工作内容与论文结构安排。
+
+第2章对实现系统的核心技术进行简述，包括OpenCV YuNet和SFace模型、活体检测技术、face_recognition与dlib方案、FastAPI框架和SQLite数据库，为后续章节的系统设计与实现奠定技术基础。
+
+第3章进行系统的需求分析与详细设计，完成五层架构的设计思路阐述，对人脸注册流、实时识别考勤流、识别后端升级、用户门户与管理接口进行详细讲解，对数据库表结构进行说明。
+
+第4章进行系统功能测试和性能测试，对注册流程、活体挑战、识别签到和审核机制进行端到端验证，评估系统在树莓派设备上的实际运行性能。
+
+最后对全文进行总结，指出系统中尚未完成或需要进一步改进的方面，并对未来工作进行了展望。
+第2章 核心技术概要
+
+2.1 OpenCV YuNet与SFace
+
+YuNet是OpenCV官方推出的一款轻量级人脸检测模型，针对端侧部署场景进行了专门优化。与传统MTCNN三阶段级联架构不同，YuNet采用单阶段密集检测思路，在一张图像上直接输出人脸边界框和关键点位置，避免了多阶段推理带来的计算累积。模型输入尺寸固定为320×320像素，通过特征金字塔结构在多个尺度上进行检测，能够覆盖从小尺寸到大尺寸的人脸目标。YuNet输出包含人脸置信度、边界框坐标（4个值）和5个关键点坐标（10个值），共计15个输出值。在树莓派CPU上，YuNet的单帧推理时间通常在30-50毫秒范围内，满足实时检测需求。
+
+SFace是OpenCV官方的人脸识别模型，基于深度残差网络架构设计。该模型将检测到的人脸区域通过仿射变换对齐到标准姿态，提取出512维特征向量。特征向量之间使用余弦相似度进行比对，相似度越高表示两张人脸越可能属于同一人。相较于传统的欧氏距离匹配，余弦相似度对特征向量的幅度变化不敏感，在光照变化和摄像头质量差异场景下表现更稳定。SFace模型文件大小约为7-8MB，在树莓派CPU上的单帧特征提取时间约为40-80毫秒。
+
+选择YuNet和SFace作为主要识别后端，主要基于以下考虑。模型文件体积小，不需要额外下载大规模权重文件，通过curl命令即可从OpenCV官方仓库获取。推理速度快，在树莓派CPU上能够在可接受时间内完成检测和特征提取。OpenCV官方维护，模型质量和接口稳定性有保障，不依赖第三方库的持续兼容性。自动回退机制实现简单，通过检查模型文件是否存在即可判断是否启用该后端。
+
+2.2 活体检测技术
+
+活体检测是人脸识别系统中防止伪造攻击的关键环节。本系统采用被动活体检测为主的技术路线，核心模型为OpenVINO工具套件中的anti-spoof-mn3。该模型基于MobileNetV3架构设计，输入尺寸固定为128×128像素，输出为real（真人）和spoof（伪造）二分类概率。模型文件大小约为1-2MB，在树莓派CPU上的单帧推理时间约为15-30毫秒。
+
+单帧被动活体检测的处理流程如下。首先从摄像头帧中裁剪出人脸区域，缩放到128×128像素并归一化。然后将处理后的图像送入anti-spoof-mn3模型进行推理，得到real_score（真人概率）。根据real_score的大小，系统将当前帧分为三个区间。当real_score大于等于0.55时，判定为真人，直接放行进入识别流程。当real_score介于0.30和0.55之间时，判定为灰区，允许继续进入识别，但暂不写入考勤。当real_score小于0.30时，判定为疑似伪造，记为一次低分事件，连续多次低分后拦截签到。
+
+为了降低单帧判断的不稳定性，本系统引入了多帧滑动窗口融合策略。系统维护一个2秒长度的滑动窗口，收集窗口内所有活体判断帧的real_score。当窗口内样本数达到3帧以上时，计算平均real_score和低分帧占比。如果平均real_score低于阈值且屏幕重放风险信号偏高，则判定为疑似伪造。屏幕重放风险信号通过分析裁剪人脸图的Canny边缘密度、高频频域能量比例和高亮低饱和反光区域比例来估计，这些轻量图像特征在96×96的人脸小图上计算，负载可控。
+
+2.3 face_recognition与dlib
+
+face_recognition是一个基于Python的人脸识别库，底层依赖dlib的ResNet人脸编码模型。该模型在大规模人脸数据集上训练，输出128维人脸特征向量。本系统在引入YuNet/SFace方案之前，采用face_recognition/dlib作为唯一的识别后端。
+
+该方案的工作流程如下。对摄像头帧调用face_recognition.face_locations进行人脸检测，该方法基于HOG特征加SVM分类器或CNN检测器。检测到人脸后，调用face_recognition.face_encodings提取128维特征向量。将提取的特征向量与数据库中所有已审核通过的人脸编码逐个计算欧氏距离，取最小距离对应的用户作为识别结果。当最小距离小于预设阈值（本系统设置为0.52）时，判定为匹配成功。
+
+该方案的优点在于实现简单，face_recognition库封装了人脸检测和编码的完整流程，使用者无需关心底层细节。缺点在于HOG检测器对侧脸和遮挡人脸的检测率较低，且在树莓派上的检测速度相对较慢。本系统保留了该方案作为YuNet/SFace不可用时的自动回退，通过配置项recognition_model=auto控制。当YuNet或SFace模型文件不存在时，系统自动切换回face_recognition/dlib方案，确保服务不会因模型缺失而无法启动。
+
+2.4 FastAPI框架
+
+FastAPI是一个基于Python的现代Web框架，采用ASGI（Asynchronous Server Gateway Interface）协议，原生支持异步请求处理。本系统选择FastAPI而非传统的Flask或Django，主要基于以下考虑。异步支持使得系统能够同时处理摄像头推流、识别推理和页面请求，不会因为某个慢请求阻塞其他请求。类型提示驱动的自动数据校验，通过Pydantic模型对请求参数和响应格式进行强类型约束，减少运行时错误。自动生成交互式API文档，便于调试和远程管理端对接。
+
+本系统中FastAPI承担的职责包括提供树莓派终端页面路由，通过Jinja2模板渲染HTML页面。提供外网用户门户路由，包括注册、登录、用户中心和人脸采集页面。提供MJPEG实时视频流接口，将摄像头线程输出的JPEG帧持续推送给前端。提供设备侧管理员API，供Windows端远程管理系统调用。提供健康检查和终端状态轻量接口，供前端心跳探测使用。
+
+Jinja2模板引擎负责将后端数据渲染为HTML页面。本系统采用公共base.html模板定义页面骨架，各功能页面通过extends继承base.html并填充具体内容块。这样做避免了每个页面重复编写头部导航、脚本引用和样式定义的冗余代码，后续修改全局布局时只需调整base.html一个文件。
+
+2.5 SQLite数据库
+
+SQLite是一款嵌入式关系型数据库，以单个文件形式存储数据，不需要独立的数据库服务器进程。本系统选择SQLite主要基于树莓派部署场景的考虑。零配置，不需要安装和配置MySQL或PostgreSQL等独立数据库服务。单文件存储，数据库文件可以直接备份和迁移。读写性能满足考勤场景需求，在人员规模几百人以内时，查询和写入延迟均在可接受范围内。Python标准库内置sqlite3模块，不需要额外安装数据库驱动。
+
+本系统创建了四张核心数据表。roster_members表存储允许注册的单位内部成员名单，作为首次注册的白名单来源。users表存储系统中已登记的用户身份信息，包含正式登录密码哈希。face_profiles表存储与用户关联的人脸特征和审核状态，包含review_status字段区分pending、approved和rejected三种状态。attendance_records表存储考勤签到流水记录，包含签到时间、用户ID、置信度和快照路径。此外还创建了face_rejection_history轻量表，存储每个用户最近三次人脸审核驳回历史，超过三次时自动删除更早记录。
+
+数据库事务管理采用上下文管理器模式，在每次数据写入时开启事务，操作完成后提交，异常时回滚。外键约束默认开启，确保users表中的roster_member_id必须存在于roster_members表中。时间字段统一按设备本地时区写入，避免SQLite的CURRENT_TIMESTAMP默认值产生UTC时间导致的8小时时差问题。
+
+2.6 本章小结
+
+本章对论文使用的核心技术进行了简述。对OpenCV YuNet和SFace模型的原理、特性和选型理由进行了说明，为理解后续识别后端的设计奠定了基础。对活体检测技术中的anti-spoof-mn3模型、滑动窗口融合和屏幕重放检测进行了概述，帮助理解后续活体判断的实现思路。对face_recognition/dlib方案和FastAPI框架的特性进行了介绍。对SQLite数据库的表结构和事务管理进行了说明，为后续系统数据层的设计与实现提供了技术准备。
+第3章 系统设计与实现
+
+3.1 系统总体架构设计
+
+本系统的整体架构按照职责划分为五个层次，每层承担特定的功能，层与层之间通过明确的接口进行交互。
+
+配置层负责管理系统的运行参数。采用基于JSON的配置加载方式，系统启动时读取env.json文件中的配置项，覆盖代码中的默认值。配置项按功能分组，包括Web服务地址和端口、摄像头编号和分辨率、人脸识别阈值、考勤时间窗、活体检测参数等。配置类支持字典式和属性式两种访问方式，并提供配置热重载能力，在运行期间修改env.json后无需重启服务即可生效。这样做的原因是现场调试时频繁调整阈值，如果每次改参数都需要重启服务，会中断正在进行的考勤流程。
+
+数据层负责SQLite数据库的连接管理、表结构初始化和数据访问封装。系统启动时自动检测数据库文件是否存在，不存在则创建并执行建表脚本。数据访问通过Repository模式封装，上层代码不直接编写SQL语句，而是调用封装好的方法完成增删改查操作。事务管理采用上下文管理器，确保数据写入的原子性。外键约束默认开启，维护数据完整性。
+
+摄像头采集层负责打开摄像头设备、持续读取视频帧、做镜像和旋转变换，并将帧数据推送给识别线程和MJPEG推流线程。采集线程以较高帧率运行（默认15FPS），优先保障视频流的流畅度。采集线程不执行识别计算，只负责获取最新的摄像头画面并将其编码为JPEG格式推送给前端。
+
+Web页面层基于FastAPI和Jinja2实现，提供终端识别页面、外网用户门户页面和管理员API接口。终端页面面向站在考勤设备前的使用者，展示实时摄像头画面和识别状态提示。外网用户门户面向远程注册用户，提供注册、登录、人脸采集和审核状态查看功能。管理员API供Windows端远程管理系统调用，提供成员管理、人脸审核、考勤查询和设备状态监控等接口。
+
+识别业务层是系统的核心，包含严格识别引擎、活体检测服务和识别后端适配器。严格识别引擎接收摄像头帧作为输入，执行一系列门禁判断后返回识别结果。活体检测服务加载OpenVINO模型并执行推理，返回真人概率和屏幕重放风险信号。识别后端适配器统一了face_recognition/dlib和OpenCV YuNet/SFace两种识别链路的调用接口，上层代码无需关心底层使用哪种模型。
+
+五层架构的设计遵循开闭原则和高内聚低耦合的设计思路。每层只关注自身职责，通过接口与相邻层通信。新增功能时，通常只需要在某一层次内扩展，不需要修改其他层次。例如新增一种活体检测方法，只需要在识别业务层增加新的服务类，不需要改动摄像头采集层和Web页面层。
+
+3.2 人脸注册流的设计与实现
+
+3.2.1 注册流程设计
+
+本系统的人脸注册流面向单位内部成员设计，采用"白名单导入→首次注册→改密→登录→人脸采集→审核→入库"的完整链路。
+
+系统启动时自动读取data/member_roster.csv文件，将名单中的成员信息同步到roster_members表中。CSV文件包含姓名、学号/工号、角色、初始密码哈希和状态五个字段。运行期间如果检测到CSV文件发生变化，系统会自动热同步，将新增成员加入数据库，将移除成员标记为不可注册状态。
+
+用户在名单中的成员首次访问注册页面时，需要输入姓名、学号/工号和初始密码。系统在校验三项信息均与名单匹配后，允许用户设置新密码。注册成功时强制设置符合复杂度要求的新密码，后续登录只使用新密码，不再接受初始密码。这样做是为了防止初始密码泄露后他人冒名注册。
+
+注册改密成功后，系统自动跳转到人脸采集页面。用户通过浏览器摄像头进行现场拍照，照片经过质量校验和活体挑战后提交入库。新上传的人脸档案默认状态为pending，需要管理员审核通过后才能参与终端识别。审核通过后状态变为approved，审核不通过变为rejected并记录驳回原因。
+
+3.2.2 动作挑战活体检测
+
+本系统在人脸注册端采用分步动作挑战机制，替代传统的单张照片上传方式。这样做的原因是单张照片很容易被他人代拍或使用照片冒充，动作挑战通过要求用户完成一系列指定动作，有效提高了伪造门槛。
+
+动作挑战的具体流程如下。前端用户开启浏览器摄像头后，向后端申请创建一次动作挑战会话。后端从预设模板中随机生成一组3步动作序列，例如"正视镜头→轻微左侧转→正视镜头"。每一步动作对应不同的姿态要求，正脸步骤要求人脸yaw角和roll角均小于阈值，侧转步骤要求yaw角达到一定的偏移量但不超过上限。
+
+用户在每一步完成抓拍后，前端将压缩后的JPEG图像上传到后端。后端对抓拍图执行人脸检测和landmarks提取，计算当前姿态是否满足该步骤的要求。同时提取当前帧的人脸编码，与第一步抓拍的人脸编码进行同人一致性比对。如果检测到换人，当前挑战直接作废，用户需要重新开始。
+
+所有步骤都通过后，后端从通过挑战的正脸抓拍中按Laplacian清晰度评分挑选最佳的一张作为最终注册照。被选中的注册照还需要额外执行纸张和屏幕翻拍检测。检测逻辑分析照片是否存在包裹人脸的矩形边框、周期纹理和高亮反光等信号，多信号同时命中时拒绝该注册照。最终通过所有校验的注册照保存为pending状态，等待管理员审核。
+
+动作挑战会话具有过期时间，超时未完成则自动失效。挑战过程中如果摄像头中断或用户关闭页面，会话同样会被清理。每个会话只允许提交一次，提交成功后不能再继续抓拍。
+
+3.2.3 质量校验流水线
+
+本系统的质量校验采用流水线结构，每个校验器独立负责一种质量检测项，主流程只负责编排校验器的执行顺序。这样的设计符合开闭原则，新增校验规则时只需添加新的校验器类并挂载到流水线中，不需要修改核心主流程。
+
+当前实现的校验器包括以下六类。
+
+单人检测校验器对输入图像执行人脸检测，如果检测到零张人脸则拒绝，返回"未检测到人脸"的提示信息。如果检测到多张人脸也直接拒绝，返回"画面中存在多人"。这样做确保了注册照只包含一个人的人脸，避免后续识别时出现歧义。
+
+人脸尺寸校验器计算检测到的人脸区域在整张图像中的面积占比。如果占比低于最低门槛（通常设置为5%-8%），则拒绝并提示"人脸过小，请靠近摄像头"。人脸过小时特征提取的精度会显著下降，影响后续识别的准确性。
+
+模糊度检测校验器对裁剪后的人脸ROI（Region of Interest）计算Laplacian方差。Laplacian算子对图像的高频分量敏感，模糊图像的Laplacian方差较低。当方差低于预设阈值时，判定图像过于模糊，拒绝提交。
+
+亮度检测校验器对人脸ROI计算灰度均值和高亮/低亮像素比例。过暗的人脸图像缺乏足够的纹理信息，过亮的人脸图像存在过曝区域，两种情况都会影响特征提取质量。同时检测人脸左右两侧的亮度差异，过大差异表明存在单侧强光，也予以拒绝。
+
+姿态检测校验器基于人脸landmarks估计yaw、pitch和roll三个方向的角度。yaw角过大表明侧脸严重，pitch角异常表明抬头或低头幅度过大，roll角过大表明头部倾斜严重。每种角度都有对应的阈值，超出范围则拒绝。
+
+纸张/屏幕翻拍检测校验器在最终注册照上执行，检测包裹人脸的矩形边框、疑似屏幕或印刷周期纹理以及低饱和高亮反光区域。多信号同时命中时，判定为翻拍照片并拒绝。该检测器的设计思路是纸质照片和屏幕翻拍往往会在图像中留下可检测的伪影信号，真人直接拍照不会产生这些信号。
+
+每个校验器输出统一的结果结构，包含passed（是否通过）、code（错误码）、message（提示信息）和score（评分）。主流程按顺序执行各个校验器，任一校验器不通过则终止流水线并返回失败原因。
+
+3.2.4 审核机制
+
+新上传的人脸档案默认进入pending（待审核）状态，只有管理员审核通过变为approved后，该人脸档案才会被终端识别引擎加载到识别人脸库中。rejected状态的人脸档案不参与识别，用户可以看到驳回原因并重新上传。
+
+审核机制包含以下几个设计要点。结构化驳回原因，系统内置了十个固定驳回原因选项，包括卡通头像、翻拍屏幕、纸质照片、人脸不清晰、光线异常、姿态错误、遮挡过多、多人脸、信息不符和其他原因。管理员审核时可以多选固定原因，也可以补充自由备注。驳回原因同时保存原因编码和中文标签，便于前端展示和后续统计分析。
+
+最近三次驳回历史保存在独立的face_rejection_history表中。每次审核为rejected时，系统向该表插入一条记录，包含驳回时间、原因编码和备注。当记录数超过3条时，自动删除最早的记录。保留最近三次驳回历史的目的是让用户知道自己为什么被驳回，有针对性地重新拍照提交。
+
+用户重新上传策略方面，当用户重新提交人脸照片时，系统先完成新照片的质量校验和编码提取，然后删除该用户之前保留的人脸照片文件和旧的face_profiles记录，只保存当前这一次新上传的照片。系统只为每个用户保留一份当前人脸档案，避免历史旧照片在树莓派本地无意义堆积。重新上传存在冷却时间，当前测试值设置为300秒，正式上线时可调整为24小时。
+
+3.3 实时识别考勤流的设计与实现
+
+3.3.1 严格识别引擎
+
+本系统的终端识别不是"看到一张脸就签到"的简单逻辑，而是设计了多道门禁的严格识别引擎。只有所有门禁都通过，才会返回attendance_ready状态，允许外层写入考勤记录。
+
+单人门禁是识别流程的第一道约束。系统对当前帧执行人脸检测，如果没有检测到人脸，返回no_face状态，提示用户靠近摄像头。如果检测到多张人脸，返回multi_face状态，提示画面中人员过多。单人入镜的约束确保了识别结果不会产生歧义，避免了多人同时出现在画面中时系统无法确定签到对象的场景。
+
+人脸面积门禁在检测到单张人脸后执行。计算人脸区域在整张图像中的面积占比，低于最低门槛时返回face_too_small状态。这个门禁的意义在于，当用户距离摄像头过远时，虽然能检测到人脸，但分辨率不足以保证特征提取的准确性。当前版本将最小面积占比进行了下调，用户不必贴得很近也能通过检测，这样改善了考勤现场的使用体验。
+
+编码匹配门禁对合格的人脸提取特征编码，与数据库中所有已审核通过的人脸编码逐个计算距离。当最小距离超过阈值（本系统设置为0.52）时，判定为未知用户，返回unknown状态。如果第一名和第二名候选者的距离过于接近（距离比值超过0.85），判定为歧义匹配，返回ambiguous_match状态，避免将用户误认为另一个相似面孔的人。
+
+多帧稳定确认门禁不是"一帧命中就签到"。系统维护一个连续命中计数器，只有同一身份连续命中达到设定次数（当前设置为1次，可根据需要调整）后，才进入下一阶段。多帧确认的目的是降低单帧误识别的概率，提高识别结果的稳定性。
+
+考勤时间窗门禁判断当前时间是否在配置的考勤时间段内。不在时间窗内的识别结果返回outside_attendance_window状态，不会写入考勤记录。冷却时间门禁判断该用户是否在最近的签到冷却期内。同一用户在冷却时间（当前配置为60秒）内重复签到会被拦截，返回attendance_cooldown状态，避免同一个人连续签到产生冗余记录。
+
+3.3.2 被动活体检测
+
+本系统在识别流程中引入OpenVINO anti-spoof-mn3模型进行被动活体前置判断。该模型部署在识别引擎的人脸编码提取之前，确保只有通过了活体判断的人脸才进入身份匹配环节。
+
+模型加载阶段，系统通过OpenVINO的Core API读取IR格式的模型文件（.xml和.bin），在CPU设备上编译并创建推理请求。模型输入为128×128×3的RGB图像，输出为包含real和spoof两个类别概率的张量。加载过程在系统启动时执行一次，推理过程在每次识别时复用同一个推理请求实例。
+
+推理流程方面，系统从当前帧中裁剪出人脸区域，缩放到128×128像素，将像素值归一化到[0, 1]区间，转换为模型期望的输入格式。执行推理后得到real_score（真人概率）。根据real_score的大小，系统将当前帧判断为三个区间之一。
+
+当real_score大于等于0.55时，判定为真人，直接放行进入后续识别流程。当real_score介于0.30和0.55之间时，判定为灰区，允许继续进入识别但暂不写入考勤，后续结合多帧融合结果综合判断。当real_score小于0.30时，判定为疑似伪造，记为一次低分事件。低分期间允许继续做人脸匹配但不允许写考勤。连续多次（当前配置为3次）低分后，系统判定疑似假脸，终端提示"疑似假脸"或"活体重试"。
+
+三区间策略的设计考虑了考勤场景的特殊性。考勤是高频使用场景，单帧误杀真人会带来很差的体验。因此系统采取了"宁可多确认、不可误拦截"的策略，在灰区和低分区间都允许继续做人脸匹配，只是不立即写考勤。只有连续多次低分确认后才进行拦截，降低了将真人误判为假脸的概率。
+
+3.3.3 多帧活体融合
+
+单帧活体检测容易受到摄像头质量、现场光线和人脸姿态的影响，出现分数波动。为了提升判断的稳定性，本系统引入了基于滑动窗口的多帧活体融合策略。
+
+系统维护一个时间长度为2秒的滑动窗口，收集窗口内所有执行了活体判断的帧的real_score。窗口内的样本来自识别线程的推理结果，识别线程默认以5FPS的频率运行，因此2秒窗口内通常能收集到8-10个样本。当窗口内样本数少于3个时，系统显示"正在确认"状态，暂不做出最终判断。
+
+当窗口内样本数达到最低要求后，系统计算以下指标。平均real_score，窗口内所有样本real_score的算术平均值。低分帧占比，real_score小于0.30的样本数量占总样本数的比例。灰区帧占比，real_score介于0.30和0.55之间的样本数量占总样本数的比例。屏幕重放风险均值，窗口内所有帧的屏幕重放风险信号的平均值。
+
+判定规则如下。如果平均real_score高于0.45且屏幕重放风险低于0.72，判定为真人，允许签到。如果平均real_score低于0.35或屏幕重放风险高于0.55，判定为疑似伪造，拒绝签到。其他情况归入不确定区域，继续收集样本并显示"正在确认"。
+
+屏幕重放风险信号的计算基于三项轻量图像特征。高亮低饱和反光比例，统计人脸区域内亮度高于阈值但饱和度低于阈值的像素占比，屏幕反光往往呈现高亮低饱和特征。Canny边缘密度，对人脸ROI执行Canny边缘检测，计算边缘像素占总像素的比例，屏幕翻拍图像的边缘密度通常与真人照片存在差异。高频频域能量比例，对人脸ROI做二维傅里叶变换，计算高频区域能量占总能量的比例，屏幕像素的周期性排列会在频域产生可检测的能量聚集。
+
+这三项信号都在96×96的裁剪人脸小图上计算，计算量极小，不会对识别线程的实时性产生影响。多帧融合和屏幕重放检测的结合，使得系统在不要求用户做转头、眨眼等配合动作的前提下，也能对照片和屏幕重放攻击保持一定的风险感知能力。
+
+3.3.4 采集与识别线程解耦
+
+本系统对摄像头采集和识别推理进行了线程级别的解耦设计。这是终端页面视频流流畅度提升最关键的一次改造。
+
+旧实现中，摄像头线程在一个循环内同时执行读帧、识别推理、叠字绘制、JPEG编码和MJPEG推流。严格识别包含人脸检测、活体推理、特征提取和距离匹配等多个步骤，单次推理耗时在树莓派上可达数百毫秒。识别计算直接阻塞了视频流的刷新，导致终端画面出现明显的卡顿感。
+
+新实现将采集和识别拆分为两个独立的后台线程。采集线程以较高帧率（默认15FPS）持续从摄像头读取最新帧，编码为JPEG后推送给前端MJPEG流。采集线程不做任何识别计算，只负责保持视频流的流畅输出。同时，采集线程会读取识别线程的最新结果并将其叠加到当前帧上，让用户看到实时的识别状态提示。
+
+识别线程以较低频率（默认5FPS）运行，每次从共享缓冲区获取最新的摄像头帧进行识别推理。识别线程不会追赶旧帧，如果缓冲区中有新的帧到来，识别线程会丢弃尚未处理的旧帧，直接处理最新的一帧。这样做避免了识别线程积压大量待处理图像导致的延迟累积。
+
+两个线程之间通过线程安全的共享变量交换数据。采集线程将最新帧写入共享缓冲区，识别线程从缓冲区读取。识别线程将识别结果写入共享状态变量，采集线程读取结果并叠加到视频帧上。共享变量的读写使用锁保护，避免并发访问导致的数据竞争。
+
+识别线程还定期（默认每60秒）执行人脸库热重载。热重载期间，识别线程从数据库重新加载所有approved状态的人脸档案，更新内存中的编码库。热重载期间不影响识别线程的正常工作，新的编码库在加载完成后通过原子替换的方式生效。
+
+3.4 识别后端升级
+
+3.4.1 原有face_recognition/dlib方案
+
+本系统最初的识别后端采用face_recognition库提供的dlib ResNet方案。该方案通过HOG特征检测器定位人脸，通过预训练的ResNet模型提取128维人脸编码，通过欧氏距离与已知人脸库进行匹配。该方案在开发初期用于快速验证业务逻辑的可行性。
+
+该方案的主要局限在于HOG检测器对非正面人脸的检测率较低，在侧脸、低头或抬头场景下容易出现漏检。同时face_recognition库的检测速度在树莓派上相对较慢，影响了终端的实时性。在识别准确性方面，128维编码在大规模人脸库中的区分能力有限，在光照变化和摄像头质量差异场景下的鲁棒性不够理想。
+
+3.4.2 OpenCV YuNet+SFace方案
+
+为提升识别性能和端侧部署效率，本系统新增了基于OpenCV官方模型的识别后端。该后端由YuNet人脸检测模型和SFace特征提取模型组成。
+
+YuNet检测模型的加载在系统初始化时完成。通过cv2.FaceDetectorYN.create方法读取ONNX格式的模型文件，设置输入尺寸为320×320，置信度阈值设置为0.8，NMS阈值设置为0.3。检测时先将摄像头帧缩放到320×320，送入模型得到检测结果。检测结果包含人脸边界框和5个关键点坐标，通过坐标映射将检测结果还原到原始帧尺寸。
+
+SFace特征提取模型的加载同样在系统初始化时完成。通过cv2.FaceRecognizerSF.create方法读取ONNX格式的模型文件。特征提取时，首先使用YuNet检测到的关键点信息，通过仿射变换将人脸对齐到标准姿态。对齐后的人脸区域送入SFace模型，得到512维特征向量。
+
+身份匹配阶段，将提取的512维特征向量与数据库中所有已审核通过的人脸编码逐个计算余弦相似度。余弦相似度计算公式为两个向量点积除以各自模长的乘积，结果在-1到1之间。取最大余弦相似度对应的用户作为识别结果，当最大相似度超过预设阈值（本系统设置为0.6-0.7范围）时，判定为匹配成功。
+
+3.4.3 双后端自动回退策略
+
+本系统通过配置项recognition_model控制识别后端的选择。当recognition_model设置为auto时，系统在启动时检查YuNet和SFace模型文件是否存在。如果两个模型文件都存在，优先使用opencv_sface后端。如果任一模型文件缺失，自动回退到face_recognition后端。
+
+自动回退策略的实现通过识别后端适配器完成。适配器定义了一个统一的接口，包含detect_faces和extract_encoding两个方法。opencv_sface后端和face_recognition后端分别实现该接口，通过工厂方法在启动时选择具体的后端实例。上层代码只调用适配器接口，不需要关心底层使用哪种后端。
+
+这样设计的好处是现场部署时不会因为模型文件未下载而导致服务无法启动。管理员可以先用face_recognition后端让系统运行起来，后续再下载YuNet/SFace模型文件并切换到更优的识别后端。整个切换过程只需要修改配置项并重启服务，不需要修改业务代码。
+
+3.5 用户门户与管理接口
+
+3.5.1 用户注册、登录与人脸上传页面
+
+外网用户门户提供了一组面向普通用户的Web页面，与树莓派终端识别页面彻底分离。门户页面通过访问来源判断入口策略，非本地访问时只保留门户页面入口，本地访问时只保留终端页面入口。
+
+注册页面接收用户输入的姓名、学号/工号和初始密码，提交到后端进行白名单校验。校验通过后允许用户设置新密码，注册成功后自动跳转到人脸采集页面。登录页面接收用户名和新密码，校验通过后创建Session并跳转到用户中心。
+
+用户中心页面展示当前用户的登录状态、人脸档案状态和审核信息。如果用户从未上传过人脸照片，显示"上传人脸照片"按钮。如果已上传但处于pending状态，显示"等待审核"提示。如果已上传且处于approved状态，显示"已生效"提示。如果处于rejected状态，显示驳回原因和重新上传按钮（冷却时间结束后可用）。
+
+人脸采集页面提供浏览器摄像头现场拍摄功能。用户通过浏览器摄像头进行现场拍照，照片经过前端压缩后提交到后端。后端执行质量校验流水线和活体挑战，通过后保存为pending状态的人脸档案。
+
+3.5.2 设备侧管理员API设计
+
+设备侧管理员API通过FastAPI的APIRouter实现，挂载在/api/admin路径下。所有管理员接口均需要附带Authorization: Bearer Token进行身份验证，Token值通过env.json配置。
+
+API涵盖以下功能模块。设备信息模块提供设备型号、操作系统版本、服务运行状态和考勤策略配置。设备健康模块提供数据库状态、摄像头状态、已加载人脸库数量和最近识别结果摘要。设备性能模块提供CPU温度、系统负载、内存使用和磁盘占用。成员管理模块提供成员名单查询、新增和修改。用户管理模块提供用户列表查询、用户详情查询、状态修改和密码重置。人脸档案模块提供人脸档案列表查询（支持按审核状态筛选）、档案详情查询、审核结果提交和档案删除。考勤记录模块提供考勤记录列表查询和今日考勤汇总查询。
+
+所有API返回数据采用统一的JSON格式，成功响应包含数据字段，错误响应包含错误码和错误信息。API文档通过FastAPI的自动文档功能生成，便于Windows端开发人员查阅和调试。
+
+3.5.3 Windows远程管理端对接简述
+
+Windows端管理员系统作为一个独立的FastAPI+Jinja2项目运行在已加入Tailscale网络的Windows电脑上。Windows端通过Tailscale内网地址访问树莓派的管理员API，不需要直接暴露树莓派到公网。
+
+Windows端的职责是读取树莓派接口数据并渲染为可视化页面，不直接参与识别和考勤业务逻辑。两个系统通过Tailscale网络实现低耦合连接，树莓派持续独立运行，Windows端可以随时连接或断开，不影响树莓派的考勤功能。
+
+Windows端当前实现了仪表盘、成员管理、人脸档案审核和考勤记录四个页面。仪表盘展示树莓派健康状态、性能指标和今日考勤汇总。成员管理展示成员名单和用户列表的对应关系。人脸档案审核展示已上传的人脸档案，支持按审核状态筛选和提交审核结果。考勤记录展示考勤流水和抓拍图。
+
+3.6 数据库设计
+
+本系统使用SQLite作为本地数据库，核心表结构如下。
+
+roster_members表存储允许注册的单位内部成员名单。字段包括id（主键自增）、name（姓名）、code（唯一学号/工号）、role（成员角色）、status（active或disabled）、initial_password_hash（初始密码哈希）、created_at和updated_at。该表作为首次注册的白名单来源，只有名单中的成员才能完成首次注册。
+
+users表存储系统中已登记的用户身份信息。字段包括id（主键自增）、roster_member_id（关联roster_members表的外键）、name（姓名）、code（唯一编号）、password_hash（正式密码哈希）、password_changed_at（改密时间）、last_login_at（最后登录时间）和created_at。该表保存正式登录凭证，所有用户身份信息通过该表管理。
+
+face_profiles表存储与用户关联的人脸特征和审核状态。字段包括id（主键自增）、user_id（关联users表的外键）、image_path（图片路径）、encoding（人脸编码，存储为Base64编码的字符串）、review_status（审核状态：pending/approved/rejected）、review_comment（审核备注）、reviewed_at（审核时间）、reviewed_by（审核人标识）、review_reason_codes（驳回原因编码列表，JSON格式存储）、created_at。该表将用户和人脸特征对应起来，终端识别引擎只加载review_status为approved的记录。
+
+attendance_records表存储考勤签到流水记录。字段包括id（主键自增）、user_id（关联users表的外键）、check_type（签到类型）、check_time（签到时间）、snapshot_path（现场抓拍图路径）、confidence（识别置信度）。该表存放实际签到流水，供后台页面查询和统计。
+
+face_rejection_history表存储用户最近三次人脸审核驳回历史。字段包括id（主键自增）、user_id（关联users表的外键）、reason_codes（驳回原因编码列表）、comment（备注）、created_at。该表只保留每个用户最近的3条驳回记录，超过时自动删除更早的记录。
+
+时间约定方面，created_at、updated_at、password_changed_at、last_login_at和check_time字段统一按设备本地时区写入。实现方式为在Python侧获取当前本地时间后写入数据库，而不是依赖SQLite的CURRENT_TIMESTAMP默认值，避免UTC时间导致的8小时时差问题。
+
+3.7 本章小结
+
+本章对系统的总体架构和各功能模块进行了详细的设计与实现说明。对五层架构的设计思路和各层职责进行了阐述，说明了模块间解耦的实现方式。对人脸注册流的完整链路、动作挑战活体检测机制、质量校验流水线设计和审核机制进行了详细讲解。对实时识别考勤流的严格识别引擎、被动活体检测、多帧活体融合和采集识别线程解耦进行了说明。对识别后端的升级和双后端自动回退策略进行了介绍。对用户门户、管理员API和Windows端对接进行了概述。对数据库表结构和时间约定进行了说明。
+第4章 系统测试
+
+4.1 测试环境与目的
+
+系统测试在树莓派设备上进行，测试环境配置如下。硬件平台为树莓派4B（4GB内存），操作系统为Raspberry Pi OS（基于Debian的64位版本），Python版本为3.9。摄像头采用普通USB摄像头，分辨率设置为1280×720，帧率15FPS。人脸识别模型使用OpenCV YuNet（检测）和SFace（特征提取），活体检测模型使用OpenVINO anti-spoof-mn3。系统通过uvicorn以reload模式启动，监听5000端口。
+
+系统测试的目的包括验证各功能模块是否按设计预期工作，评估系统在树莓派设备上的实际运行性能，发现并修复业务流程中的边缘情况，以及验证各模块间的接口是否正确对接。
+
+4.2 功能测试
+
+4.2.1 注册流程测试
+
+注册流程测试验证从名单导入到人脸入库的端到端链路。测试步骤如下。
+
+准备CSV名单文件，包含3条测试成员记录，分别设置不同的姓名、学号/工号和初始密码。启动服务后检查roster_members表是否正确导入了3条记录。访问注册页面，输入正确的姓名、学号和初始密码，设置新密码后提交。验证users表中是否新增了对应用户，且password_hash与注册时设置的新密码匹配。验证初始密码不能再用于二次注册。
+
+输入不正确的初始密码进行注册，验证系统返回"初始密码错误"的提示信息。输入不在名单中的学号进行注册，验证系统返回"该编号不在允许注册名单中"的提示。已完成注册的学号再次尝试注册，验证系统返回"该编号已完成注册"的提示。
+
+注册成功后跳转到人脸采集页面，开启浏览器摄像头进行现场拍照。提交照片后验证后端是否正确执行了质量校验流水线。使用模糊照片提交，验证系统返回"图像过于模糊"的提示。使用侧脸照片提交，验证系统返回"姿态不符合要求"的提示。使用包含多人的照片提交，验证系统返回"画面中存在多人"的提示。
+
+动作挑战测试中，按步骤完成正脸、侧转、正脸三步抓拍。验证系统正确判断了每一步的姿态要求。验证同人一致性校验通过，最终注册照被正确挑选并保存为pending状态。
+
+4.2.2 活体挑战测试
+
+活体挑战测试验证动作挑战环节对伪造攻击的防御能力。测试场景包括以下几种。
+
+使用纸质照片对着摄像头拍摄。在动作挑战过程中，系统通过姿态检测发现照片中的人脸无法完成转头动作，挑战失败。同时最终注册照的翻拍检测也会命中纸张边框信号，照片被拒绝。
+
+使用手机屏幕播放预录视频。在动作挑战过程中，视频内容无法响应系统随机生成的左转或右转指令，挑战步骤无法通过。即使预录视频中包含了转头动作，由于无法知道本次挑战的具体方向顺序，也很难恰好匹配，挑战同样会失败。最终注册照的翻拍检测会检测到屏幕摩尔纹和反光信号，进一步降低绕过风险。
+
+真人现场完成挑战。正常用户站在摄像头前，按系统提示完成正脸、侧转、正脸三步动作。每一步的姿态检测通过，同人一致性校验通过，最终注册照通过翻拍检测。人脸档案保存为pending状态，等待管理员审核。
+
+4.2.3 识别签到测试
+
+识别签到测试验证终端实时识别和自动签到功能的正确性。测试场景包括以下几种。
+
+已注册用户签到测试。已在系统中完成人脸注册且管理员审核通过的用户站在摄像头前，系统检测到单人人脸后执行活体判断。活体通过后提取人脸特征，与已审核人脸库进行比对。匹配成功后经过多帧稳定确认和考勤时间窗检查，最终写入attendance_records表。验证数据库中新增了一条签到记录，包含正确的用户ID、签到时间和置信度。同时验证data/snapshots目录下保存了现场抓拍图。
+
+未注册用户签到测试。未在系统中注册的人员站在摄像头前，系统检测到人脸并提取特征，但在已知人脸库中找不到匹配对象。返回unknown状态，不写入考勤记录。终端页面提示"未注册用户"。
+
+多人入镜测试。两人同时出现在摄像头画面中，系统检测到多张人脸，返回multi_face状态，不执行识别和签到。终端页面提示"画面中人员过多"。
+
+冷却时间测试。同一用户在签到成功后立即再次站在摄像头前，系统识别到该用户但判断处于冷却时间内（当前配置60秒），返回attendance_cooldown状态，不重复写入考勤记录。
+
+非考勤时间测试。在配置的考勤时间窗外（例如下午时段），系统识别到用户但判断不在考勤时间窗内，返回outside_attendance_window状态，不写入考勤记录。
+
+4.2.4 审核流程测试
+
+审核流程测试验证人脸档案从上传到审核通过的完整链路。测试步骤如下。
+
+新用户上传人脸照片后，验证face_profiles表中该记录的review_status为pending。通过Windows管理端或管理员API查询待审核列表，验证该记录出现在pending状态的筛选结果中。
+
+管理员审核通过测试。提交审核结果为approved，填写审核备注。验证face_profiles表中该记录的review_status变为approved，review_comment和reviewed_at字段被正确更新。验证终端识别引擎在下次热重载时加载了该人脸档案。
+
+管理员审核驳回测试。提交审核结果为rejected，选择驳回原因编码（如"人脸不清晰"）并填写补充备注。验证face_profiles表中该记录的review_status变为rejected，review_reason_codes字段正确保存了原因编码列表。验证face_rejection_history表中新增了一条驳回记录。
+
+用户查看驳回信息测试。用户登录用户中心页面，验证页面正确展示了驳回原因和驳回时间。用户点击重新上传按钮，在冷却时间结束后重新拍摄并提交照片。验证旧的人脸档案被删除，新的档案保存为pending状态。
+
+4.3 性能测试
+
+4.3.1 识别帧率与延迟
+
+在树莓派4B（4GB内存）设备上测试识别线程的实际运行频率。使用OpenCV YuNet+SFace后端时，识别线程单帧处理耗时约为120-200毫秒，其中YuNet检测约30-50毫秒，SFace特征提取约40-80毫秒，身份匹配（在100人规模人脸库下）约5-10毫秒，活体推理约15-30毫秒。识别线程配置目标频率为5FPS，实际运行中由于单帧处理时间低于200毫秒，可以稳定达到5FPS的目标频率。
+
+使用face_recognition/dlib后端时，单帧处理耗时约为300-500毫秒，其中HOG人脸检测约150-300毫秒，特征提取约100-150毫秒，距离匹配约10-20毫秒。在100人规模人脸库下，dlib后端的识别速度明显慢于YuNet+SFace方案。
+
+4.3.2 活体推理耗时
+
+OpenVINO anti-spoof-mn3模型在树莓派CPU上的单帧推理时间约为15-30毫秒。该推理时间与人脸识别并行执行，不会增加识别线程的总耗时。多帧滑动窗口的融合计算在识别线程内完成，涉及窗口内8-10个样本的统计计算，耗时在1毫秒以内，可以忽略不计。屏幕重放风险信号的三项轻量图像特征计算在96×96的人脸小图上执行，总耗时约5-10毫秒。
+
+4.3.3 内存占用
+
+系统在树莓派上的总体内存占用约为300-500MB。其中Python进程本身占用约80-120MB，OpenCV模型加载占用约50-80MB，OpenVINO推理引擎占用约100-150MB，face_recognition/dlib模型占用约150-200MB（如果启用），数据库和缓存占用约10-20MB。在4GB内存的树莓派4B上，系统内存占用在可接受范围内，不会导致系统交换（swap）。
+
+4.3.4 视频流流畅度
+
+采集线程与识别线程解耦后，MJPEG视频流的帧率稳定在12-15FPS（与摄像头配置帧率一致），不再受识别计算速度的影响。在旧实现中（采集和识别在同一线程），视频流帧率约为2-3FPS，存在明显卡顿感。新实现下用户看到的终端画面流畅度显著提升。
+
+4.4 本章小结
+
+本章对系统的各项功能进行了端到端测试。注册流程测试验证了名单导入、用户注册、改密、人脸采集和审核入库的完整链路。活体挑战测试验证了动作挑战机制对纸质照片和屏幕视频等伪造攻击的防御能力。识别签到测试验证了严格识别引擎的各项门禁条件和自动签到功能。审核流程测试验证了人脸档案从上传、审核通过/驳回到重新上传的完整生命周期。性能测试评估了系统在树莓派设备上的识别帧率、活体推理耗时、内存占用和视频流流畅度，验证了系统在端侧部署场景下的实际运行能力。
+结  论
+
+本文设计并实现了一套部署在树莓派设备上的人脸识别考勤系统。该系统面向真实考勤场景，在有限算力的嵌入式设备上完成了从人脸注册、活体挑战、身份识别到自动签到的端到端业务流程。
+
+本文完成的主要工作如下。
+
+第一，完成了人脸注册流的设计与实现。采用分步动作挑战机制替代传统的单张照片上传，通过正脸、侧转、再正脸三步抓拍结合同人一致性校验，有效提高了注册照的真实性。设计了可独立扩展的质量校验流水线，涵盖单人检测、人脸面积、模糊度、亮度、姿态和翻拍检测六个校验器，每个校验器遵循开闭原则独立实现。引入审核机制，新上传人脸档案需经管理员审核通过后才参与终端识别。
+
+第二，完成了实时识别考勤流的设计与实现。设计了包含单人门禁、人脸面积门禁、编码匹配门禁、多帧稳定确认、考勤时间窗和冷却时间六道约束的严格识别引擎，确保签到结果的可靠性。引入OpenVINO anti-spoof-mn3模型进行被动活体前置判断，采用三区间策略（放行/灰区/低分连续确认）降低真人误杀率。设计了2秒滑动窗口多帧融合机制，对real_score进行平滑处理，并辅以屏幕重放风险信号分析，实现了不要求用户做配合动作的无感活体检测。
+
+第三，完成了识别后端的升级。在原有face_recognition/dlib方案基础上，新增OpenCV YuNet检测加SFace特征提取的识别链路，通过配置项控制后端选择，当新模型不可用时自动回退到旧方案。实测表明YuNet+SFace方案在树莓派上的单帧处理速度比dlib方案提升约2-3倍。
+
+第四，完成了系统架构与接口设计。采用五层架构（配置层、数据层、摄像头采集层、Web页面层、识别业务层），层与层之间职责清晰。实现了基于FastAPI的外网用户门户和设备侧管理员API，Windows端通过Tailscale网络远程访问树莓派接口，实现了人脸审核、成员管理和考勤记录查询。
+
+本文的系统在以下几个方面体现了一定的创新性。动作挑战活体检测将注册端的活体验证从"信任一张照片"升级为"信任一个动作过程"，通过随机生成的动作序列和同人一致性校验降低了预录视频攻击的成功率。多帧被动活体融合通过短时间滑动窗口对活体分数进行平滑，结合屏幕重放风险信号，在不要求用户转头、眨眼等配合动作的前提下实现了对照片和屏幕攻击的风险感知。严格识别多门禁设计将识别从"匹配到就签到"简化逻辑升级为多道约束的精细化判断，降低了误识别和重复签到的概率。采集与识别线程解耦使视频流帧率不再受识别计算速度的影响，终端画面流畅度显著提升。
+
+系统目前仍存在以下不足。活体检测的屏幕重放风险信号基于轻量图像特征，对高质量手机屏幕的区分能力有限，后续可以考虑引入更复杂的时序分析方法。识别后端在大规模人脸库（千人以上）场景下的检索速度有待优化，后续可以考虑引入FAISS等向量索引库。当前系统仅支持单台树莓派设备，后续可以扩展为多设备协同的考勤网络，实现跨地点的统一考勤管理。用户门户页面仍有原型性质，后续可以根据实际使用反馈优化交互体验和视觉设计。Windows管理端的审核功能和操作日志仍需进一步丰富。
+
+未来工作可以沿着以下方向推进。接入更强大的被动活体检测模型，利用多帧时序信息和rPPG生理信号进一步提升活体判断的准确率。引入考勤规则引擎，支持不同场景下的差异化考勤策略配置。增加数据导出和统计报表功能，为管理人员提供更直观的数据分析工具。探索模型量化和TensorRT加速等技术，进一步降低模型推理的计算开销，提升系统在更低配置设备上的运行能力。
+
+参  考  文  献
+
+[1] Parkhi O M, Vedaldi A, Zisserman A. Deep Face Recognition[C]//British Machine Vision Conference. 2015.
+[2] Schroff F, Kalenichenko D, Philbin J. FaceNet: A Unified Embedding for Face Recognition and Clustering[C]//IEEE Conference on Computer Vision and Pattern Recognition. 2015: 815-823.
+[3] Deng J, Guo J, Xue N, et al. ArcFace: Additive Angular Margin Loss for Deep Face Recognition[C]//IEEE Conference on Computer Vision and Pattern Recognition. 2019: 4690-4699.
+[4] Wang H, Wang Y, Zhou Z, et al. CosFace: Large Margin Cosine Loss for Deep Face Recognition[C]//IEEE Conference on Computer Vision and Pattern Recognition. 2018: 5265-5274.
+[5] Zhang K, Zhang Z, Li Z, et al. Joint Face Detection and Alignment Using Multitask Cascaded Convolutional Networks[J]. IEEE Signal Processing Letters, 2016, 23(10): 1499-1503.
+[6] Dlib: Machine Learning Library[EB/OL]. https://github.com/davisking/dlib.
+[7] face_recognition: The world's simplest face recognition library[EB/OL]. https://github.com/ageitgey/face_recognition.
+[8] OpenCV: Open Source Computer Vision Library[EB/OL]. https://opencv.org/.
+[9] YuNet Face Detection Model[EB/OL]. https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet.
+[10] SFace Face Recognition Model[EB/OL]. https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface.
+[11] OpenVINO Toolkit[EB/OL]. https://www.intel.com/content/www/us/en/developer/tools/openvino-toolkit/overview.html.
+[12] Zhang Y, Yin X, Bai Y, et al. Silent-Face-Anti-Spoofing: A Real-time Face Anti-spoofing System[EB/OL]. https://github.com/minivision-ai/Silent-Face-Anti-Spoofing.
+[13] George A, Marcel J. Deep Pixel-wise Binary Supervision for Face Presentation Attack Detection[C]//IEEE International Joint Conference on Biometrics. 2019.
+[14] FastAPI Web Framework[EB/OL]. https://fastapi.tiangolo.com/.
+[15] SQLite Database Engine[EB/OL]. https://www.sqlite.org/.
+[16] 李晓佳. 基于改进CNN与RNN的物联网入侵检测模型[D]. 哈尔滨师范大学, 2023.
+[17] 徐五一, 杨岗, 卫昱乾, 等. 基于机器学习的旋转机械故障识别算法的输入特征综述[J/OL]. 西华大学学报(自然科学版), 2025.
+[18] 王凤, 陈天浩, 盛忠起. 拓扑优化结构的卷积神经网络求解方法[J/OL]. 机械设计与制造, 2025.
+[19] Liu Y. Construction of Knowledge Graph for Marine Diesel Engine Faults Based on Deep Learning Methods[J]. Journal of Marine Science and Engineering, 2025, 13.
+[20] Wu D, Pigou L, Kindermans P J, et al. Deep Dynamic Neural Networks for Multimodal Gesture Segmentation and Recognition[J]. IEEE Transactions on Pattern Analysis and Machine Intelligence, 2016, 38(8): 1-1.
+[21] He M, He D. Deep Learning Based Approach for Bearing Fault Diagnosis[J]. IEEE Transactions on Industry Applications, 2017, 53(3): 3057-3065.
+[22] Chen T, Xiang Y, Wang X. IFD-BiC: a Class-incremental Continual Learning Method for Diesel Engine Fault Diagnosis[J]. IOP Publishing Ltd, 2025.
+[23] Funa Z, Zhou P, et al. A Multimodal Feature Fusion-Based Deep Learning Method for Online Fault Diagnosis of Rotating Machinery[J]. Sensors, 2018.
+[24] Zhang S, Zhang S, Wang B, et al. Machine Learning and Deep Learning Algorithms for Bearing Fault Diagnostics: A Comprehensive Review[J]. arXiv preprint arXiv:1901.08247, 2019.
+[25] Alshorman O, Alkahatni F, Masadeh M, et al. Sounds and Acoustic Emission-based Early Fault Diagnosis of Induction Motor: A Review Study[J]. Advances in Mechanical Engineering, 2021.
+[26] Chen J, Qian J, Zhang X, et al. Root-KGD: A Novel Framework for Root Cause Diagnosis Based on Knowledge Graph and Industrial Data[J]. 2024.
+[27] Wang T, Qi G, Wu T. KGroot: Enhancing Root Cause Analysis through Knowledge Graphs and Graph Convolutional Neural Networks[J]. 2024.
+[28] Shen J, Yang S, Zhao C, et al. FedLED: Label-Free Equipment Fault Diagnosis With Vertical Federated Transfer Learning[J]. IEEE Transactions on Instrumentation and Measurement, 2024, 73.
+[29] Maschler B, Knodel T, Weyrich M. Towards Deep Industrial Transfer Learning for Anomaly Detection on Time Series Data[J]. 2021.
+[30] Ding X, He Q, Luo N. A Fusion Feature and Its Improvement Based on Locality Preserving Projections for Rolling Element Bearing Fault Classification[J]. Journal of Sound & Vibration, 2015, 335: 367-383.
+[31] 卓文海, 刘庆杰, 徐璐, 等. 基于MFCC-CNN的轨道交通车致二次结构噪声信号识别[J]. 铁道建筑, 2025, 65(4): 137-142.
+[32] Wu Y, Liu F, Wan L, et al. Intelligent Fault Diagnostic Model for Industrial Equipment Based on Multimodal Knowledge Graph[J]. IEEE Sensors Journal, 2023.
+[33] 罗晓青. 基于频谱的柴油发电机振动故障诊断方法[J]. 内燃机与配件, 2025(6): 83-85.
+[34] 叶万兴. 基于并行卷积神经网络的风机叶片开裂故障预测[D]. 广西大学, 2024.
+[35] 刘川, 马玉娟, 范剑超. 基于小样本生成对抗网络的光学遥感影像溢油语义分割[J]. 海洋环境科学, 2025, 44(1): 107-115.
+[36] 王子斌. 基于迁移学习的跨领域数据分类方法研究[J]. 大数据时代, 2025(2): 39-43.
+[37] 陈高勇, 何彬, 赵刚. 拓扑优化结构再设计中的神经网络求解方法[J]. 机械设计与制造, 2023(9).
+[38] 边巴拉姆, 白天可, 殷锐, 等. 深度学习算法在山南市雅桑站流量模拟中的应用研究[J/OL]. 水电能源科学, 2025(7): 11-15.
+
+致  谢
+
+感谢我的毕业设计指导教师，从选题、需求分析到系统实现和论文撰写的整个过程中，老师每次的指导都帮助我理清了思路，指出了实现中的不足。老师严谨认真的治学态度让我受益良多。
+
+感谢实验室的学长们，在系统开发期间定期检查进度，对架构设计和模块拆分提出了建设性的意见。在活体检测方案选择和识别后端升级等关键技术决策上，学长们的建议帮助我避免了不必要的弯路。一起做毕业设计的同学们在遇到问题时给予的帮助和支持，也让我顺利完成了整个项目。
+
+感谢哈尔滨工程大学，学校浓厚的学习氛围和丰富的实验资源为我的学习和实践提供了良好的环境。感谢计算机科学与技术学院各位老师的培养与教导，让我在四年期间掌握了扎实的专业知识和工程实践能力。
+
+最后感谢我的家人和朋友，他们的理解、支持和鼓励是我完成学业的坚实后盾。

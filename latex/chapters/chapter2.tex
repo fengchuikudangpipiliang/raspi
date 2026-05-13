@@ -1,0 +1,201 @@
+\chapter{核心技术概要}
+
+\section{YuNet人脸检测模型}
+
+YuNet是OpenCV官方推出的轻量级人脸检测模型，针对端侧部署场景进行了专门优化。与MTCNN等三阶段级联架构不同，YuNet采用单阶段密集检测思路，在一张图像上直接输出人脸边界框和关键点位置，避免了多阶段推理带来的计算累积。
+
+YuNet模型输入尺寸固定为$320 \times 320$像素，通过特征金字塔结构在多个尺度上进行检测，能够覆盖从小尺寸到大尺寸的人脸目标。模型采用Anchor-Free检测策略，在预设的网格点上直接回归人脸边界框和关键点坐标。对于输入图像$X$，模型输出包含以下信息：
+
+\begin{equation}
+    Y = \{ (c_i, b_i, l_i) \mid i = 1, 2, \dots, N \}
+\end{equation}
+
+其中，$N$为检测到的候选人脸数量，$c_i \in [0, 1]$为第$i$个人脸的置信度分数，$b_i = (x_i, y_i, w_i, h_i)$为边界框坐标（中心点$x_i, y_i$和宽度$w_i$、高度$h_i$），$l_i = (x_{i1}, y_{i1}, \dots, x_{i5}, y_{i5})$为5个关键点的坐标（左眼、右眼、鼻尖、左嘴角、右嘴角）。
+
+模型输出共15个值（1个置信度+4个边界框坐标+10个关键点坐标）。检测时首先对置信度分数进行非极大值抑制（NMS），NMS的IoU阈值设置为0.3：
+
+\begin{equation}
+    \text{IoU}(A, B) = \frac{\text{area}(A \cap B)}{\text{area}(A \cup B)} < 0.3
+\end{equation}
+
+其中$A$和$B$为两个候选边界框。通过NMS过滤后保留的边界框再经坐标映射还原到原始帧尺寸。在树莓派CPU上，YuNet的单帧推理时间通常在30--50毫秒范围内。
+
+\section{SFace人脸特征提取模型}
+
+SFace是OpenCV官方的人脸识别模型，基于深度残差网络架构设计。该模型将检测到的人脸区域通过仿射变换对齐到标准姿态，提取出高维特征向量。
+
+\subsection{人脸对齐}
+
+利用YuNet检测到的5个关键点，SFace通过仿射变换将人脸对齐到标准姿态。设检测到的关键点集合为$\{(x_j, y_j)\}_{j=1}^{5}$，目标标准关键点集合为$\{(x'_j, y'_j)\}_{j=1}^{5}$，通过最小二乘法求解仿射变换矩阵：
+
+\begin{equation}
+    \begin{bmatrix}
+        x'_j \\
+        y'_j
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+        a & b \\
+        c & d
+    \end{bmatrix}
+    \begin{bmatrix}
+        x_j \\
+        y_j
+    \end{bmatrix}
+    +
+    \begin{bmatrix}
+        t_x \\
+        t_y
+    \end{bmatrix}
+\end{equation}
+
+变换后的对齐人脸区域尺寸为$112 \times 112$像素，作为SFace模型的输入。
+
+\subsection{特征提取与匹配}
+
+对齐后的人脸区域送入SFace模型，提取出512维特征向量$f \in \mathbb{R}^{512}$。特征向量之间使用余弦相似度进行比对：
+
+\begin{equation}
+    \text{sim}(f_1, f_2) = \frac{f_1 \cdot f_2}{\|f_1\| \cdot \|f_2\|} = \frac{\sum_{k=1}^{512} f_{1k} f_{2k}}{\sqrt{\sum_{k=1}^{512} f_{1k}^2} \sqrt{\sum_{k=1}^{512} f_{2k}^2}}
+\end{equation}
+
+余弦相似度结果在$[-1, 1]$之间，值越接近1表示两张人脸越可能属于同一人。识别时，将提取的特征向量与数据库中所有已审核通过的人脸编码逐个计算余弦相似度，取最大值对应的用户作为识别结果。当最大相似度超过预设阈值时，判定为匹配成功。
+
+相较于欧氏距离匹配，余弦相似度对特征向量的幅度变化不敏感，在光照变化和摄像头质量差异场景下表现更稳定。SFace模型文件大小约为7--8MB，在树莓派CPU上的单帧特征提取时间约为40--80毫秒。
+
+\section{被动活体检测}
+
+活体检测是人脸识别系统中防止照片、视频等伪造攻击的关键环节。本系统采用被动活体检测为主的技术路线，核心模型为OpenVINO工具套件中的anti-spoof-mn3\cite{silentface}。该模型基于MobileNetV3架构设计，在大规模真人/伪造样本上训练而成。
+
+\subsection{模型推理}
+
+模型输入尺寸固定为$128 \times 128$像素的RGB图像。推理流程如下：首先从摄像头帧中裁剪出人脸区域，缩放到$128 \times 128$像素并进行归一化处理：
+
+\begin{equation}
+    I_{\text{norm}} = \frac{I_{\text{crop}} - \mu}{\sigma}
+\end{equation}
+
+其中$\mu$和$\sigma$分别为训练集的像素均值和标准差。处理后的图像送入anti-spoof-mn3模型，输出为二分类概率：
+
+\begin{equation}
+    P = \text{softmax}(z) = \left[ \frac{e^{z_1}}{e^{z_1} + e^{z_2}}, \frac{e^{z_2}}{e^{z_1} + e^{z_2}} \right]
+\end{equation}
+
+其中$z_1$和$z_2$分别为真人（real）和伪造（spoof）类别的logits。定义真人概率（real\_score）为：
+
+\begin{equation}
+    S_{\text{real}} = \frac{e^{z_1}}{e^{z_1} + e^{z_2}}
+\end{equation}
+
+模型文件大小约为1--2MB，在树莓派CPU上的单帧推理时间约为15--30毫秒。
+
+\subsection{三区间判定策略}
+
+根据real\_score的大小，系统将当前帧判断为三个区间之一：
+
+\begin{itemize}
+    \item \textbf{放行区间}：$S_{\text{real}} \geq 0.55$，判定为真人，直接放行进入后续识别流程。
+    \item \textbf{灰区}：$0.30 \leq S_{\text{real}} < 0.55$，允许继续进入识别但暂不写入考勤，后续结合多帧融合结果综合判断。
+    \item \textbf{低分区}：$S_{\text{real}} < 0.30$，记为一次低分事件，连续多次低分后拦截签到。
+\end{itemize}
+
+三区间策略的设计考虑了考勤场景的特殊性。考勤是高频使用场景，单帧误杀真人会带来很差的体验。因此系统采取了``宁可多确认、不可误拦截''的策略，在灰区和低分区间都允许继续做人脸匹配，只是不立即写考勤。只有连续多次低分确认后才进行拦截，降低了将真人误判为假脸的概率。
+
+\subsection{多帧滑动窗口融合}
+
+单帧活体检测容易受到摄像头质量、现场光线和人脸姿态的影响，出现分数波动。为提升判断稳定性，本系统引入了基于滑动窗口的多帧活体融合策略。
+
+系统维护一个时间长度为$T = 2.0$秒的滑动窗口，收集窗口内所有执行了活体判断的帧的real\_score。设窗口内的样本集合为$\{S_{\text{real}}^{(t)}\}_{t=1}^{M}$，其中$M$为窗口内的样本数量（识别线程默认以5FPS运行，2秒窗口内通常收集8--10个样本）。当$M \geq 3$时，计算以下统计量：
+
+\begin{equation}
+    \bar{S}_{\text{real}} = \frac{1}{M} \sum_{t=1}^{M} S_{\text{real}}^{(t)}
+\end{equation}
+
+\begin{equation}
+    R_{\text{low}} = \frac{1}{M} \sum_{t=1}^{M} \mathbb{I}(S_{\text{real}}^{(t)} < 0.30)
+\end{equation}
+
+其中$\mathbb{I}(\cdot)$为指示函数。$R_{\text{low}}$为低分帧占比。
+
+判定规则如下：
+
+\begin{equation}
+    \text{Decision} =
+    \begin{cases}
+        \text{真人} & \bar{S}_{\text{real}} > 0.45 \text{ 且 } R_{\text{risk}} < 0.72 \\
+        \text{疑似伪造} & \bar{S}_{\text{real}} < 0.35 \text{ 或 } R_{\text{risk}} > 0.55 \\
+        \text{不确定} & \text{其他情况}
+    \end{cases}
+\end{equation}
+
+其中$R_{\text{risk}}$为屏幕重放风险均值（见下一节）。
+
+\subsection{屏幕重放风险信号}
+
+为增强对屏幕翻拍攻击的检测能力，本系统设计了三项轻量图像特征作为屏幕重放风险信号，均在$96 \times 96$的裁剪人脸小图上计算。
+
+\textbf{（1）高亮低饱和反光比例}：统计人脸区域内亮度高于阈值$L_{\text{th}}$但饱和度低于阈值$S_{\text{th}}$的像素占比：
+
+\begin{equation}
+    R_{\text{glare}} = \frac{\sum_{p} \mathbb{I}(V_p > L_{\text{th}} \land S_p < S_{\text{th}})}{W \times H}
+\end{equation}
+
+其中$V_p$和$S_p$分别为像素$p$在HSV色彩空间中的明度和饱和度，$W$和$H$为人脸小图的宽度和高度。屏幕反光往往呈现高亮低饱和特征。
+
+\textbf{（2）Canny边缘密度}：对人脸ROI执行Canny边缘检测，计算边缘像素占总像素的比例：
+
+\begin{equation}
+    R_{\text{edge}} = \frac{\text{count}(\text{Canny}(I_{\text{face}}))}{W \times H}
+\end{equation}
+
+屏幕翻拍图像的边缘密度通常与真人照片存在差异。
+
+\textbf{（3）高频频域能量比例}：对人脸ROI做二维离散傅里叶变换（DFT），计算高频区域能量占总能量的比例：
+
+\begin{equation}
+    R_{\text{freq}} = \frac{\sum_{(u,v) \in \Omega_H} |F(u,v)|^2}{\sum_{(u,v)} |F(u,v)|^2}
+\end{equation}
+
+其中$F(u,v)$为DFT系数，$\Omega_H$为高频区域。屏幕像素的周期性排列会在频域产生可检测的能量聚集。
+
+三项信号经加权融合得到屏幕重放风险值：
+
+\begin{equation}
+    R_{\text{risk}} = w_1 R_{\text{glare}} + w_2 R_{\text{edge}} + w_3 R_{\text{freq}}
+\end{equation}
+
+这三项信号的计算量极小，不会对识别线程的实时性产生影响。
+
+\section{质量校验技术}
+
+\subsection{Laplacian模糊度检测}
+
+图像模糊度检测采用Laplacian方差方法。Laplacian算子对图像的高频分量敏感，模糊图像的Laplacian方差较低。对人脸ROI计算灰度图像$L$的Laplacian响应：
+
+\begin{equation}
+    \text{Var}_{\text{Lap}} = \text{Var}\left( \nabla^2 L \right) = \frac{1}{N} \sum_{i=1}^{N} \left( (\nabla^2 L)_i - \overline{\nabla^2 L} \right)^2
+\end{equation}
+
+其中$N$为ROI像素总数，$\nabla^2$为Laplacian算子。当$\text{Var}_{\text{Lap}}$低于预设阈值时，判定图像过于模糊。
+
+\subsection{姿态估计}
+
+基于人脸5个关键点估计yaw（偏航角）、pitch（俯仰角）和roll（翻滚角）三个方向的角度。利用关键点的几何关系：
+
+\begin{equation}
+    \text{roll} = \arctan\left( \frac{y_{\text{right\_eye}} - y_{\text{left\_eye}}}{x_{\text{right\_eye}} - x_{\text{left\_eye}}} \right)
+\end{equation}
+
+yaw和pitch通过求解Perspective-n-Point（PnP）问题估计，将2D关键点投影到3D标准人脸模型上求解旋转矩阵。
+
+\section{FastAPI框架与SQLite数据库}
+
+FastAPI是一个基于Python的现代Web框架，采用ASGI（Asynchronous Server Gateway Interface）协议，原生支持异步请求处理。本系统选择FastAPI主要基于以下考虑：异步支持使得系统能够同时处理摄像头推流、识别推理和页面请求，不会因为某个慢请求阻塞其他请求；类型提示驱动的自动数据校验，通过Pydantic模型对请求参数和响应格式进行强类型约束；自动生成交互式API文档，便于远程管理端对接。
+
+SQLite是一款嵌入式关系型数据库，以单个文件形式存储数据，不需要独立的数据库服务器进程。本系统选择SQLite主要基于树莓派部署场景的考虑：零配置，不需要安装和配置MySQL等独立数据库服务；单文件存储，数据库文件可以直接备份和迁移；Python标准库内置sqlite3模块，不需要额外安装数据库驱动。
+
+数据库事务管理采用上下文管理器模式，在每次数据写入时开启事务，操作完成后提交，异常时回滚。外键约束默认开启，维护数据完整性。时间字段统一按设备本地时区写入，避免SQLite的CURRENT\_TIMESTAMP默认值产生UTC时间导致的8小时时差问题。
+
+\section{本章小结}
+
+本章对论文使用的核心技术进行了简述。对YuNet人脸检测模型和SFace特征提取模型的原理、公式和特性进行了说明，为理解后续识别后端的设计奠定了基础。对被动活体检测技术中的anti-spoof-mn3模型、三区间判定策略、滑动窗口融合和屏幕重放检测进行了公式化描述。对质量校验技术中的Laplacian模糊度检测和姿态估计进行了说明。对FastAPI框架的特性和SQLite数据库的事务管理进行了介绍，为后续系统数据层的设计与实现提供了技术准备。

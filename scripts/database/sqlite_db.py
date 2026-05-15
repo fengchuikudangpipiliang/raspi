@@ -453,6 +453,18 @@ class AttendanceRepository:
             ).fetchone()
             return dict(row) if row else None
 
+    def delete_roster_member(self, roster_member_id: int) -> bool:
+        """
+        删除一条未激活成员名单记录。
+        这里仅操作 roster_members 表本身；是否允许删除、是否同步 CSV 由上层名单服务负责判断。
+        """
+        with self.db.session() as connection:
+            cursor = connection.execute(
+                "DELETE FROM roster_members WHERE id = ?",
+                (roster_member_id,),
+            )
+            return cursor.rowcount > 0
+
     def list_roster_members(self):
         with self.db.session() as connection:
             rows = connection.execute(
@@ -507,6 +519,33 @@ class AttendanceRepository:
                 WHERE users.id = ?
                 """,
                 (user_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_user_by_roster_member_id(self, roster_member_id: int) -> Optional[dict]:
+        """
+        根据成员名单 id 查找已生成的用户记录。
+        删除初始名单前使用它判断该名单是否已经被用户激活，避免误删后形成孤儿账号。
+        """
+        with self.db.session() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    users.id,
+                    users.roster_member_id,
+                    users.name,
+                    users.code,
+                    users.password_hash,
+                    users.password_changed_at,
+                    users.last_login_at,
+                    users.created_at,
+                    roster_members.role AS roster_role,
+                    roster_members.status AS roster_status
+                FROM users
+                LEFT JOIN roster_members ON roster_members.id = users.roster_member_id
+                WHERE users.roster_member_id = ?
+                """,
+                (roster_member_id,),
             ).fetchone()
             return dict(row) if row else None
 
@@ -626,6 +665,65 @@ class AttendanceRepository:
                 (user_id,),
             ).fetchone()
             return dict(row) if row else None
+
+    def list_user_file_paths(self, user_id: int) -> dict:
+        """
+        收集某个激活用户名下可能需要同步清理的本地文件路径。
+        删除用户前先读取这些路径，避免用户记录被删后无法再定位注册照和签到快照。
+        """
+        with self.db.session() as connection:
+            face_rows = connection.execute(
+                """
+                SELECT image_path
+                FROM face_profiles
+                WHERE user_id = ? AND image_path IS NOT NULL AND TRIM(image_path) != ''
+                """,
+                (user_id,),
+            ).fetchall()
+            snapshot_rows = connection.execute(
+                """
+                SELECT snapshot_path
+                FROM attendance_records
+                WHERE user_id = ? AND snapshot_path IS NOT NULL AND TRIM(snapshot_path) != ''
+                """,
+                (user_id,),
+            ).fetchall()
+
+        return {
+            "face_profile_images": [row["image_path"] for row in face_rows],
+            "attendance_snapshots": [row["snapshot_path"] for row in snapshot_rows],
+        }
+
+    def delete_user(self, user_id: int) -> bool:
+        """
+        删除一个已激活用户及其业务数据。
+        为了不依赖 SQLite 外键开关，这里显式清理驳回历史、人脸档案和考勤记录，再删除 users 主记录。
+        """
+        with self.db.session() as connection:
+            existing = connection.execute(
+                "SELECT id FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            if not existing:
+                return False
+
+            connection.execute(
+                "DELETE FROM face_rejection_history WHERE user_id = ?",
+                (user_id,),
+            )
+            connection.execute(
+                "DELETE FROM face_profiles WHERE user_id = ?",
+                (user_id,),
+            )
+            connection.execute(
+                "DELETE FROM attendance_records WHERE user_id = ?",
+                (user_id,),
+            )
+            cursor = connection.execute(
+                "DELETE FROM users WHERE id = ?",
+                (user_id,),
+            )
+            return cursor.rowcount > 0
 
     def save_face_profile(self, user_id, image_path, encoding):
         """

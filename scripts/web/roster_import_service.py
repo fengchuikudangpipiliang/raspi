@@ -202,6 +202,34 @@ class RosterImportService:
             "member": member,
         }
 
+    def delete_member(self, roster_member_id: int) -> dict:
+        """
+        删除一条未激活的初始成员名单。
+        删除时会同时移除 CSV 行和 SQLite 中的 roster_members 记录；如果该名单已经关联用户，则拒绝删除。
+        """
+        self.sync_from_file_if_changed()
+        existing_member = self.repo.get_roster_member_by_id(roster_member_id)
+        if not existing_member:
+            raise ValueError("成员名单不存在。")
+
+        linked_user = self.repo.get_user_by_roster_member_id(roster_member_id)
+        if linked_user:
+            raise ValueError("该成员已关联激活用户，请先删除激活人员或改为 disabled。")
+
+        rows = self._load_rows_from_file(allow_missing=True)
+        row_index = self._find_row_index_by_code(rows, existing_member["code"])
+        csv_removed = row_index is not None
+        if csv_removed:
+            del rows[row_index]
+            self._save_rows_to_file(rows)
+
+        deleted = self.repo.delete_roster_member(roster_member_id)
+        return {
+            "deleted": deleted,
+            "csv_removed": csv_removed,
+            "member": existing_member,
+        }
+
     def _normalize_row(self, raw_row: dict, row_index: int) -> dict:
         """
         对每一行名单做边界校验，尽量把错误定位到具体行号，方便管理员修表。

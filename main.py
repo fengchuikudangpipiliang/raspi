@@ -74,20 +74,6 @@ app.include_router(
 
 
 
-def get_terminal_recognition_backend_label() -> str:
-    """
-    读取终端当前实际启用的人脸识别后端。
-    这个值只用于本地终端展示，不影响识别逻辑。
-    """
-    recognizer = getattr(camera, "recognizer", None)
-    backend = getattr(recognizer, "active_recognition_model", "") if recognizer else ""
-    if backend == "opencv_sface":
-        return "YuNet + SFace"
-    if backend == "face_recognition":
-        return "dlib"
-    return "自动选择"
-
-
 def build_user_screen_data() -> dict:
     """
     终端识别页数据。
@@ -95,18 +81,16 @@ def build_user_screen_data() -> dict:
     """
     today = datetime.now().astimezone().date().isoformat()
     summary = terminal_attendance_repo.get_attendance_summary(date=today)
-    backend_label = get_terminal_recognition_backend_label()
-    liveness_enabled = bool(cfg.attendance_liveness_enabled)
     site_name = (cfg.device_location or cfg.device_name or "未设置").strip()
 
     return {
         "site_name": site_name,
         "welcome_title": "请面对摄像头完成签到",
-        "welcome_text": "将面部保持在取景框中央，系统会在识别稳定后自动记录考勤。",
+        "welcome_text": "",
         "tips": [
-            "保持单人入镜，多人进入画面时系统会暂停签到",
-            f"当前识别后端：{backend_label}",
-            "活体检测已启用" if liveness_enabled else "当前按人脸识别稳定性完成签到",
+            "一次只站一位同学，旁边有人请稍微让开一点",
+            "脸对着摄像头，眼睛和口鼻别被遮住",
+            "看到签到成功后再离开，没成功就稍微靠近一点",
         ],
         "today_stats": [
             {

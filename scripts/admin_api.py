@@ -152,6 +152,37 @@ def build_admin_api_router(camera, started_at, roster_import_service=None) -> AP
         except HTTPException:
             return False
 
+    def cleanup_local_files(path_texts: list[str]) -> dict:
+        """
+        删除数据库记录关联的项目内本地文件。
+        文件清理采用最佳努力策略：非法路径、缺失文件或删除失败会记录到 skipped_files，不影响数据库删除结果。
+        """
+        deleted_files = []
+        skipped_files = []
+        seen_paths = set()
+
+        for path_text in path_texts:
+            if not path_text or path_text in seen_paths:
+                continue
+            seen_paths.add(path_text)
+
+            try:
+                file_path = resolve_local_file(path_text)
+            except HTTPException as error:
+                skipped_files.append({"path": path_text, "reason": str(error.detail)})
+                continue
+
+            try:
+                file_path.unlink(missing_ok=True)
+                deleted_files.append(str(file_path.relative_to(project_root)))
+            except OSError as error:
+                skipped_files.append({"path": path_text, "reason": str(error)})
+
+        return {
+            "deleted_files": deleted_files,
+            "skipped_files": skipped_files,
+        }
+
     def serialize_attendance_record(record: dict) -> dict:
         snapshot_available = attendance_snapshot_exists(record)
         return {
@@ -281,6 +312,37 @@ def build_admin_api_router(camera, started_at, roster_import_service=None) -> AP
             },
         }
 
+    @router.delete("/roster-members/{roster_member_id}")
+    def delete_roster_member(request: Request, roster_member_id: int):
+        """
+        删除未激活的初始成员名单。
+        已关联用户的成员不允许直接删除，避免 roster_members 与 users 的业务链路被意外切断。
+        """
+        require_admin_token(request)
+        try:
+            result = roster_import_service.delete_member(roster_member_id)
+        except ValueError as error:
+            message = str(error)
+            if message == "成员名单不存在。":
+                status_code = 404
+            elif "已关联激活用户" in message:
+                status_code = 409
+            else:
+                status_code = 400
+            raise HTTPException(status_code=status_code, detail=message) from error
+
+        member = result["member"]
+        return {
+            "ok": True,
+            "data": {
+                "deleted": bool(result["deleted"]),
+                "csv_removed": bool(result["csv_removed"]),
+                "roster_member_id": roster_member_id,
+                "name": member["name"],
+                "code": member["code"],
+            },
+        }
+
     @router.get("/users")
     def get_users(request: Request, search: str = "", status: str = "", registered_only: bool = False):
         require_admin_token(request)
@@ -309,6 +371,44 @@ def build_admin_api_router(camera, started_at, roster_import_service=None) -> AP
                 **serialize_user_summary(user),
                 "face_profiles": face_profiles,
                 "recent_face_rejections": recent_rejections,
+            },
+        }
+
+    @router.delete("/users/{user_id}")
+    def delete_user(request: Request, user_id: int):
+        """
+        删除已激活人员及其业务数据。
+        删除用户会同步移除人脸档案、驳回历史、考勤记录，并尽量清理注册照和签到快照文件。
+        """
+        require_admin_token(request)
+        ensure_roster_synced()
+        user = repo.get_user_detail(user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在。")
+
+        file_paths = repo.list_user_file_paths(user_id)
+        deleted = repo.delete_user(user_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="用户不存在。")
+
+        cleanup = cleanup_local_files(
+            [
+                *file_paths["face_profile_images"],
+                *file_paths["attendance_snapshots"],
+            ]
+        )
+        return {
+            "ok": True,
+            "data": {
+                "deleted": True,
+                "user_id": user_id,
+                "name": user["name"],
+                "code": user["code"],
+                "roster_member_id": user.get("roster_member_id"),
+                "roster_member_retained": bool(user.get("roster_member_id")),
+                "face_profile_image_count": len(file_paths["face_profile_images"]),
+                "attendance_snapshot_count": len(file_paths["attendance_snapshots"]),
+                **cleanup,
             },
         }
 

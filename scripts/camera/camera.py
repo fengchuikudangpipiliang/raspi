@@ -229,6 +229,10 @@ class VideoCamera:
             return False
 
         self.capture = cv2.VideoCapture(self.camera_index)
+        camera_fourcc = str(getattr(cfg, "camera_fourcc", "") or "").strip().upper()
+        if camera_fourcc:
+            # 优先要求 USB 摄像头输出 MJPG 等压缩格式，避免部分设备在高分辨率下退回低清 YUYV 画面。
+            self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*camera_fourcc[:4]))
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, cfg.camera_width)
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.camera_height)
         self.capture.set(cv2.CAP_PROP_FPS, cfg.camera_fps)

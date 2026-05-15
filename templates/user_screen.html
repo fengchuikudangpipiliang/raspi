@@ -10,7 +10,9 @@
         <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-3 mb-4">
             <div>
                 <h1 class="display-6 fw-bold mb-2">{{ data.welcome_title }}</h1>
+                {% if data.welcome_text %}
                 <p class="hero-copy mb-0">{{ data.welcome_text }}</p>
+                {% endif %}
             </div>
             <div class="glass-chip">
                 <i class="bi bi-geo-alt"></i>
@@ -119,9 +121,10 @@
     const terminalScreenDataUrl = new URL("/api/terminal/screen-data", window.location.href).toString();
     const videoFeedUrl = new URL(videoFeedPath, window.location.href).toString();
     const healthzUrl = new URL(healthzPath, window.location.href).toString();
-    const backendCheckIntervalMs = 10_000;
-    const terminalStatusIntervalMs = 800;
-    const terminalScreenDataIntervalMs = 5_000;
+    // 终端页低频轮询间隔：这些接口只负责辅助状态展示，统一放大 5 倍以减少运行日志和本地请求噪声。
+    const backendCheckIntervalMs = 50_000;
+    const terminalStatusIntervalMs = 4_000;
+    const terminalScreenDataIntervalMs = 25_000;
     const backendCheckTimeoutMs = 5_000;
 
     let backendOnline = true;

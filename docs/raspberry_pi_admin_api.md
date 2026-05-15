@@ -2744,3 +2744,98 @@ Windows 管理端不需要因为这个终端页调整做代码修改。
 ```http
 GET /api/admin/attendance/today-summary
 ```
+
+#### 15.28 2026-05-15 成员名单与激活人员删除接口
+
+这一节记录 2026-05-15 对树莓派设备侧管理员 API 的补充。  
+本次新增两个删除接口，用来区分“初始人员名单”和“已激活人员名单”。
+
+##### 15.28.1 删除初始人员名单
+
+```http
+DELETE /api/admin/roster-members/{roster_member_id}
+Authorization: Bearer your-admin-token
+```
+
+用途：
+
+- 删除尚未激活的成员名单
+- 同步删除 CSV 成员名单文件中的对应行
+- 同步删除 SQLite `roster_members` 表中的对应记录
+
+成功返回示例：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "deleted": true,
+    "csv_removed": true,
+    "roster_member_id": 12,
+    "name": "张三",
+    "code": "20240001"
+  }
+}
+```
+
+错误规则：
+
+- `404`：成员名单不存在
+- `409`：该名单已经关联激活用户，需要先删除激活人员或改为 `disabled`
+
+##### 15.28.2 删除激活人员
+
+```http
+DELETE /api/admin/users/{user_id}
+Authorization: Bearer your-admin-token
+```
+
+用途：
+
+- 删除已激活的 `users` 用户记录
+- 删除该用户关联的 `face_profiles`
+- 删除该用户关联的 `face_rejection_history`
+- 删除该用户关联的 `attendance_records`
+- 尽量清理注册照和签到快照文件
+
+成功返回示例：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "deleted": true,
+    "user_id": 8,
+    "name": "张三",
+    "code": "20240001",
+    "roster_member_id": 12,
+    "roster_member_retained": true,
+    "face_profile_image_count": 1,
+    "attendance_snapshot_count": 3,
+    "deleted_files": [
+      "data/faces/20240001.jpg",
+      "data/snapshots/20240001_20260515.jpg"
+    ],
+    "skipped_files": []
+  }
+}
+```
+
+行为说明：
+
+- 删除激活人员后，初始名单默认保留，用户后续可以重新注册
+- 如果要彻底移除一个人，应先调用 `DELETE /api/admin/users/{user_id}`，再调用 `DELETE /api/admin/roster-members/{roster_member_id}`
+- 文件清理是最佳努力策略，文件不存在或路径非法时会写入 `skipped_files`，数据库删除仍然成功
+
+##### 15.28.3 Windows 管理端需要怎么改
+
+Windows 管理端成员管理页面可以增加两个删除入口：
+
+- 初始名单表：调用 `DELETE /api/admin/roster-members/{roster_member_id}`
+- 激活用户表：调用 `DELETE /api/admin/users/{user_id}`
+
+建议交互：
+
+- 删除前弹出确认框，明确提示删除对象和编号
+- 删除初始名单遇到 `409` 时，提示“该成员已激活，请先删除激活人员或禁用”
+- 删除激活人员后刷新用户列表、人脸档案列表和考勤统计

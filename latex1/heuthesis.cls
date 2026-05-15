@@ -77,7 +77,7 @@
 \algrenewcommand\algorithmicwhile{\textbf{当}}
 \algrenewcommand\algorithmicreturn{\textbf{返回}}
 \RequirePackage{tikz}
-\usetikzlibrary{shapes.geometric,arrows,positioning,fit}
+\usetikzlibrary{shapes.geometric,arrows,positioning,fit,calc}
 
 % ========== 超链接 ==========
 \RequirePackage{hyperref}

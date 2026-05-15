@@ -22,34 +22,64 @@
 
 \section{本文主要工作}
 
-本文围绕基于树莓派的人脸识别考勤系统，完成的主要工作如图\ref{fig:chapter1_work}所示。
+本文围绕基于树莓派的人脸识别考勤系统，完成了面向普通用户、树莓派终端和管理员的主要功能设计与实现。系统主要功能用例如图\ref{fig:chapter1_work}所示。
 
 \begin{figure}[H]
     \centering
-    \resizebox{\textwidth}{!}{%
+    \resizebox{0.96\textwidth}{!}{%
     \begin{tikzpicture}[
-        node distance=1.2cm,
-        item/.style={rectangle, rounded corners=3pt, draw=black, align=center, minimum width=3.1cm, minimum height=0.9cm, fill=gray!8},
-        arrow/.style={->, >=stealth, thick}
+        usecase/.style={ellipse, draw=black, align=center, minimum width=2.95cm, minimum height=0.82cm, fill=white},
+        boundary/.style={rectangle, draw=black, rounded corners=4pt, inner sep=0.35cm},
+        assoc/.style={-, thick},
+        include/.style={->, >=stealth, dashed, thick},
+        extend/.style={->, >=stealth, dashed, thick}
     ]
-        \node[item] (roster) {成员名单\\导入与校验};
-        \node[item, right=of roster] (portal) {用户门户\\注册与登录};
-        \node[item, right=of portal] (capture) {动作挑战\\人脸采集};
-        \node[item, right=of capture] (review) {质量校验\\管理员审核};
-        \node[item, below=1.2cm of capture] (recognize) {终端识别\\活体与匹配};
-        \node[item, right=of recognize] (attendance) {考勤写库\\快照留存};
-        \node[item, left=of recognize] (admin) {远程接口\\设备管理};
-        \draw[arrow] (roster) -- (portal);
-        \draw[arrow] (portal) -- (capture);
-        \draw[arrow] (capture) -- (review);
-        \draw[arrow] (review) -- (recognize);
-        \draw[arrow] (recognize) -- (attendance);
-        \draw[arrow] (admin) -- (recognize);
-        \draw[arrow] (attendance) |- (admin);
+        \coordinate (user) at (-5.9,1.45);
+        \coordinate (terminal) at (-5.9,-1.6);
+        \coordinate (admin) at (5.9,0);
+
+        \foreach \actor/\name in {user/普通用户,terminal/树莓派终端,admin/管理员} {
+            \draw (\actor)+(0,0.34) circle (0.14);
+            \draw (\actor)+(0,0.20) -- +(0,-0.25);
+            \draw (\actor)+(-0.32,0.02) -- +(0.32,0.02);
+            \draw (\actor)+(0,-0.25) -- +(-0.28,-0.60);
+            \draw (\actor)+(0,-0.25) -- +(0.28,-0.60);
+            \node[align=center] at ($(\actor)+(0,-0.92)$) {\name};
+        }
+
+        \node[usecase] (uc1) at (-1.8,2.15) {首次注册};
+        \node[usecase] (uc2) at (-1.8,0.95) {动作挑战采集};
+        \node[usecase] (uc3) at (1.65,1.55) {人脸质量校验};
+        \node[usecase] (uc4) at (1.65,0.35) {人脸档案审核};
+        \node[usecase] (uc5) at (-1.8,-0.95) {端侧人脸识别};
+        \node[usecase] (uc6) at (1.65,-0.95) {活体检测};
+        \node[usecase] (uc7) at (-1.8,-2.15) {自动签到};
+        \node[usecase] (uc8) at (1.65,-2.15) {考勤记录查询};
+        \node[usecase] (uc9) at (1.65,2.75) {设备状态管理};
+        \node[usecase] (uc10) at (1.65,-3.25) {重新采集资料};
+
+        \node[boundary, fit=(uc1)(uc2)(uc3)(uc4)(uc5)(uc6)(uc7)(uc8)(uc9)(uc10),
+              label={[yshift=-0.2cm]above:基于树莓派的人脸识别考勤系统}] (system) {};
+
+        \draw[assoc] (user) -- (uc1);
+        \draw[assoc] (user) -- (uc2);
+        \draw[assoc] (user) -- (uc10);
+        \draw[assoc] (terminal) -- (uc5);
+        \draw[assoc] (terminal) -- (uc7);
+        \draw[assoc] (admin) -- (uc4);
+        \draw[assoc] (admin) -- (uc8);
+        \draw[assoc] (admin) -- (uc9);
+
+        \draw[include] (uc2) -- node[above]{\scriptsize $\langle\langle$include$\rangle\rangle$} (uc3);
+        \draw[include] (uc5) -- node[above]{\scriptsize $\langle\langle$include$\rangle\rangle$} (uc6);
+        \draw[include] (uc7) -- node[left]{\scriptsize $\langle\langle$include$\rangle\rangle$} (uc5);
+        \draw[extend] (uc10) -- node[right]{\scriptsize $\langle\langle$extend$\rangle\rangle$} (uc2);
     \end{tikzpicture}}
-    \caption{本文主要工作关系}
+    \caption{系统主要功能用例图}
     \label{fig:chapter1_work}
 \end{figure}
+
+图\ref{fig:chapter1_work}从UML用例视角概括了本文系统的主要功能边界。普通用户主要参与首次注册、动作挑战、人脸采集和驳回后的重新采集；树莓派终端主要承担端侧人脸识别、活体检测和自动签到；管理员主要负责人脸档案审核、考勤记录查询和设备状态管理。图中实线表示参与者与用例之间的关联关系，虚线箭头表示用例之间的包含或扩展关系。与普通流程图相比，用例图更能体现本文工作的系统边界、参与对象和功能完整性。
 
 第一，设计并实现完整的考勤业务链路。系统从本地CSV成员名单开始，支持成员预置、用户首次注册、密码修改、人脸采集、管理员审核、终端实时识别、自动签到和考勤记录查询，覆盖小规模考勤系统的主要业务流程。
 
@@ -63,14 +93,16 @@
 
 \section{论文组织结构}
 
-本文正文围绕基于树莓派的人脸识别考勤系统展开，共分为四章。
+本文正文围绕基于树莓派的人脸识别考勤系统展开，共分为五章。
 
 第一章为绪论，介绍课题背景与意义、国内外研究现状、本文主要工作和论文组织结构。
 
 第二章为毕业设计相关关键技术，介绍系统所依赖的OpenCV YuNet、SFace、OpenVINO活体检测、FastAPI、Jinja2、Bootstrap、SQLite和Tailscale等技术。
 
-第三章为系统核心模型与总体框架，围绕系统类毕业设计展开，介绍端侧识别框架、注册审核框架、活体检测融合策略、数据模型和接口组织方式。
+第三章为系统需求分析，分析系统参与者、功能需求、非功能需求和核心业务流程，为后续系统设计提供依据。
 
-第四章为系统功能实现与测试分析，说明用户门户、注册采集、终端识别、管理员接口和数据持久化的实现过程，并给出功能测试结果和性能分析。
+第四章为系统设计，围绕系统类毕业设计展开，介绍功能结构、总体架构、部署方式、注册审核设计、端侧识别设计、数据模型和接口组织方式。
+
+第五章为系统实现与测试分析，说明用户门户、注册采集、终端识别、管理员接口和数据持久化的实现过程，并给出功能测试结果和性能分析。
 
 最后为结论，总结全文工作，分析系统不足，并提出后续改进方向。

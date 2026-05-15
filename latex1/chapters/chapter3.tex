@@ -1,377 +1,119 @@
-\chapter{系统核心模型与总体框架}
+\chapter{系统需求分析}
 
-基于树莓派的人脸识别考勤系统并非单一的人脸识别模型调用，而是由人员准入、注册采集、资料审核、终端识别、活体检测、考勤写库和远程管理等环节共同构成的应用系统。系统的核心业务链路可以概括为：管理员预置成员名单，用户完成首次注册和动作挑战，系统对注册照进行质量校验，管理员审核通过后该人脸档案进入正式识别库，树莓派终端在现场完成实时识别和考勤写入，Windows管理端通过Tailscale网络查询设备、成员、人脸档案和考勤数据。
+系统需求分析的目标是把绪论中提出的建设目标进一步转化为可设计、可实现和可测试的功能边界。本文系统面向小规模考勤场景，部署环境以树莓派为核心，业务过程覆盖成员准入、用户注册、人脸采集、资料审核、终端识别、考勤写入和远程管理。与单纯的人脸识别演示不同，考勤系统必须同时关注注册资料是否可信、终端识别是否实时、签到结果是否可追溯、管理员是否能够远程审核和维护，以及普通用户是否能够理解失败原因并重新提交资料。因此，本章从参与者、功能需求、非功能需求和核心业务流程四个方面展开分析。
 
-\section{系统总体架构设计}
+\section{需求分析概述}
 
-系统架构设计首先要明确系统面对的使用对象和功能边界。本文系统面向三类对象：第一类是普通用户，主要完成首次注册、登录、查看人脸资料状态和提交注册照；第二类是现场终端，部署在树莓派本地浏览器中，主要提供摄像头视频流、识别状态提示和自动签到；第三类是管理员，主要通过Windows管理端完成成员名单维护、人脸档案审核、考勤查询和设备状态巡检。三类对象对系统的要求不同：普通用户关注流程是否清晰、失败原因是否可理解；现场终端关注识别是否实时、提示是否简洁；管理员关注数据是否可追溯、设备是否可远程维护。为避免不同入口互相干扰，系统在功能上被划分为用户门户、注册审核、终端识别、数据管理和远程管理五部分，如图\ref{fig:function_structure}所示。
+本文系统的需求来源主要来自三类使用场景。第一类是普通用户的自助注册和人脸资料提交场景。用户需要在管理员预置名单范围内完成首次注册，随后通过浏览器摄像头完成动作挑战和人脸采集，并能够查看自己的审核状态。第二类是树莓派终端的现场签到场景。终端需要持续读取摄像头画面，在本地完成检测、识别、活体判断和考勤规则判断，并在满足条件时自动写入考勤记录。第三类是管理员的远程管理场景。管理员需要维护成员名单，审核用户提交的人脸档案，查询考勤记录和设备状态，并通过远程网络完成运维。
+
+从系统边界看，树莓派端既是业务服务节点，也是视觉推理节点和本地数据节点。系统不依赖外部云服务器完成识别，不要求Windows管理端直接读写树莓派文件系统，也不把人脸图片和考勤快照作为公开静态资源暴露。这样的边界决定了需求分析需要同时覆盖业务流程、模型推理、本地存储、接口鉴权和长期运行稳定性。
+
+\section{系统参与者与业务边界}
+
+系统主要涉及普通用户、树莓派终端和管理员三类参与者，其用例关系已在图\ref{fig:chapter1_work}中给出。普通用户关注能否顺利完成注册、采集和状态查看；树莓派终端关注能否稳定获取视频帧并完成自动签到；管理员关注资料审核、考勤追溯和设备运行状态。三类参与者围绕同一套本地数据产生协作关系，但访问权限和操作入口不同。
+
+\begin{enumerate}
+    \item 普通用户只能操作与本人相关的注册、登录、人脸采集和审核状态查看功能。用户不能直接修改审核结果，也不能查看其他用户的人脸照片或考勤记录。
+    \item 树莓派终端负责现场识别和签到写入。终端只加载审核通过的人脸档案，面对待审核或已驳回档案时不允许参与识别，以避免未确认资料影响考勤结果。
+    \item 管理员负责成员名单维护、人脸档案审核、考勤记录查询和设备状态管理。管理员通过鉴权接口访问数据，不直接绕过后端服务操作SQLite文件或图片目录。
+\end{enumerate}
+
+上述边界使系统形成清晰的职责分离：普通用户负责提交资料，管理员负责确认资料，终端负责现场识别和写入结果。系统后续设计需要围绕这种职责分离组织页面、接口、数据库状态和识别库加载策略。
+
+\section{功能需求分析}
+
+根据系统参与者和业务场景，本文系统的功能需求可以归纳为用户门户、注册采集、审核管理、终端识别、考勤记录和设备管理六类。每类功能并不是孤立页面，而是与数据库状态和后续业务流程相互关联。
+
+\begin{enumerate}
+    \item 用户门户需求。系统应支持普通用户完成首次注册、登录和用户中心查看。首次注册必须以管理员预置成员名单为准，校验姓名、编号、初始密码和新密码规则；登录后用户能够查看本人资料状态、最近审核结果、驳回原因和是否允许重新上传。
+    \item 注册采集需求。系统应支持基于浏览器摄像头的人脸采集，不允许用户绕过动作挑战直接上传任意图片。采集过程需要完成正脸、侧转和再正脸等动作校验，并在后端冻结最终可信注册照。
+    \item 审核管理需求。系统应支持管理员查询待审核、已通过和已驳回的人脸档案，查看注册照，提交通过或驳回结果，并保存审核人、审核时间、驳回原因和备注。
+    \item 终端识别需求。系统应支持树莓派端持续显示摄像头视频流，并在后台完成单人入镜判断、人脸尺寸判断、活体检测、身份匹配、考勤时间窗和重复签到冷却判断。
+    \item 考勤记录需求。系统应在签到成功后写入考勤记录，保存用户、签到时间、签到类型、识别置信度和现场快照路径。管理员应能够按日期、姓名或编号查询考勤结果，并查看对应快照。
+    \item 设备管理需求。系统应提供远程设备状态接口，支持管理员查看设备身份、数据库状态、摄像头状态、资源指标和配置重载结果，便于发现终端异常。
+\end{enumerate}
+
+功能需求与参与者之间的对应关系如表\ref{tab:functional_requirements}所示。
+
+\begin{table}[H]
+    \centering
+    \caption{系统功能需求}
+    \label{tab:functional_requirements}
+    \begin{tabularx}{\textwidth}{p{3.1cm}p{3.1cm}X}
+        \toprule
+        \textbf{需求类别} & \textbf{主要参与者} & \textbf{需求说明} \\
+        \midrule
+        成员准入与注册 & 普通用户、管理员 & 管理员预置成员名单；普通用户必须通过姓名、编号和初始密码校验后才能创建正式账号。 \\
+        动作挑战与采集 & 普通用户 & 用户通过浏览器摄像头按步骤完成正脸、侧转、正脸采集，系统在后端维护挑战状态并冻结可信注册照。 \\
+        质量校验与审核 & 普通用户、管理员 & 系统对注册照进行单人、尺寸、清晰度、亮度、姿态和翻拍风险校验；管理员对通过校验的档案进行通过或驳回。 \\
+        端侧识别签到 & 树莓派终端 & 终端读取实时帧，加载已审核人脸库，完成检测、活体、匹配和考勤规则判断，满足条件后自动签到。 \\
+        考勤追溯查询 & 管理员 & 管理员可查询考勤记录、今日汇总和签到快照，支持后续人工核查和统计。 \\
+        设备远程管理 & 管理员 & 管理员通过远程接口查看设备状态、运行指标和数据库状态，并可触发配置重载。 \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+\section{非功能需求分析}
+
+非功能需求决定系统能否在真实部署环境中持续使用。本文系统部署在树莓派上，资源有限、网络环境可能变化，且处理人脸图片和考勤数据，因此需要重点关注实时性、可靠性、安全性、易用性和可维护性。
+
+\begin{table}[H]
+    \centering
+    \caption{系统非功能需求}
+    \label{tab:nonfunctional_requirements}
+    \begin{tabularx}{\textwidth}{p{3.2cm}p{4.1cm}X}
+        \toprule
+        \textbf{需求类别} & \textbf{目标} & \textbf{设计约束} \\
+        \midrule
+        实时性 & 终端签到应在用户短暂停留时完成识别反馈。 & 采集线程与识别线程分离，识别线程只处理最新帧，目标识别频率设置为5FPS，避免历史帧积压。 \\
+        可靠性 & 终端应支持长时间运行并能处理摄像头异常。 & 摄像头打开失败或读帧失败时返回占位提示并尝试重连；数据库操作使用事务封装，避免部分写入。 \\
+        安全性 & 降低越权访问、未审核资料入库和翻拍攻击风险。 & 普通用户仅访问本人资料；管理员接口必须携带Token；终端只加载approved档案；识别流程加入活体检测和重放风险判断。 \\
+        易用性 & 用户和管理员应能够理解系统反馈。 & 注册、采集、审核和终端页面返回明确中文提示，失败原因尽量对应可操作的修正建议。 \\
+        可维护性 & 系统参数和模块应便于后续调整。 & 摄像头、模型路径、阈值、考勤规则和快照保留时间集中在配置文件中；数据库访问通过Repository封装。 \\
+        可部署性 & 系统应适合低成本、小规模场景快速部署。 & 使用FastAPI、SQLite和本地文件存储，减少外部服务器依赖；Windows管理端通过Tailscale访问树莓派接口。 \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+表\ref{tab:nonfunctional_requirements}中的需求会直接影响后续系统设计。例如，实时性需求要求识别线程不能阻塞视频流；安全性需求要求审核状态影响识别库加载；可维护性需求要求配置和数据库访问不能散落在各个路由函数中。这些约束也是第四章进行系统设计时的重要依据。
+
+\section{核心业务流程需求}
+
+系统核心业务流程需要把用户注册、资料审核、终端签到和管理员查询连接起来。业务流程不是单向的简单通过链路，而是包含驳回反馈、重新采集和考勤追溯的闭环。系统核心业务流程需求如图\ref{fig:requirement_business_flow}所示。
 
 \begin{figure}[H]
     \centering
-    \resizebox{\textwidth}{!}{%
-    \begin{tikzpicture}[
-        root/.style={rectangle, draw=black, rounded corners=3pt, align=center, minimum width=4.2cm, minimum height=0.9cm, fill=gray!15},
-        module/.style={rectangle, draw=black, rounded corners=3pt, align=center, minimum width=3.2cm, minimum height=0.78cm, fill=gray!8},
-        leaf/.style={rectangle, draw=black, rounded corners=2pt, align=center, minimum width=2.7cm, minimum height=0.62cm, fill=white},
-        arrow/.style={->, >=stealth, thick}
-    ]
-        \node[root] (system) at (0,0) {基于树莓派的人脸识别考勤系统};
-        \node[module] (portal) at (-6,-1.5) {用户门户};
-        \node[module] (enroll) at (-3,-1.5) {注册审核};
-        \node[module] (terminal) at (0,-1.5) {终端识别};
-        \node[module] (data) at (3,-1.5) {数据管理};
-        \node[module] (admin) at (6,-1.5) {远程管理};
-
-        \node[leaf] (p1) at (-6,-2.7) {首次注册/登录};
-        \node[leaf] (p2) at (-6,-3.55) {用户中心};
-        \node[leaf] (e1) at (-3,-2.7) {动作挑战};
-        \node[leaf] (e2) at (-3,-3.55) {质量校验/审核};
-        \node[leaf] (t1) at (0,-2.7) {摄像头推流};
-        \node[leaf] (t2) at (0,-3.55) {识别签到/反馈};
-        \node[leaf] (d1) at (3,-2.7) {SQLite表结构};
-        \node[leaf] (d2) at (3,-3.55) {快照与日志};
-        \node[leaf] (a1) at (6,-2.7) {成员/用户管理};
-        \node[leaf] (a2) at (6,-3.55) {设备/考勤查询};
-
-        \draw[arrow] (system) -- (portal);
-        \draw[arrow] (system) -- (enroll);
-        \draw[arrow] (system) -- (terminal);
-        \draw[arrow] (system) -- (data);
-        \draw[arrow] (system) -- (admin);
-        \draw[arrow] (portal) -- (p1);
-        \draw[arrow] (portal) -- (p2);
-        \draw[arrow] (enroll) -- (e1);
-        \draw[arrow] (enroll) -- (e2);
-        \draw[arrow] (terminal) -- (t1);
-        \draw[arrow] (terminal) -- (t2);
-        \draw[arrow] (data) -- (d1);
-        \draw[arrow] (data) -- (d2);
-        \draw[arrow] (admin) -- (a1);
-        \draw[arrow] (admin) -- (a2);
-    \end{tikzpicture}}
-    \caption{系统功能结构图}
-    \label{fig:function_structure}
-\end{figure}
-
-图\ref{fig:function_structure}体现的是功能归属而不是代码目录。用户门户负责把成员从“名单中的人员”转化为“已激活的系统用户”，因此它包含首次注册、登录和用户中心。注册审核负责把用户提交的现场照片转化为可被终端识别的人脸档案，因此它必须包含动作挑战、质量校验和管理员审核。终端识别负责现场签到，不处理账号注册和审核决策，只加载已经审核通过的人脸档案并输出识别状态。数据管理贯穿所有模块，既保存结构化数据，也保存注册照和考勤快照路径。远程管理不直接介入摄像头线程，而是通过管理员接口读取和修改业务数据。这样的功能划分使系统在使用上更加清晰：用户只看自己的注册状态，终端只负责现场签到，管理员只通过管理入口处理审核和查询。
-
-在功能划分的基础上，系统采用分层架构组织实现。分层的目的不是追求形式上的复杂，而是让摄像头采集、模型推理、业务规则、页面接口和数据库操作各自保持边界。树莓派设备算力有限，如果把视频采集、识别推理、页面响应和数据库写入混在同一段逻辑中，任何一个环节变慢都会影响现场体验。因此，系统将底层配置、数据访问、采集模型、业务规则和Web接口分层处理，如图\ref{fig:system_architecture}所示。
-
-\begin{figure}[H]
-    \centering
-    \resizebox{0.98\textwidth}{!}{%
-    \begin{tikzpicture}[
-        layer/.style={rectangle, draw=black, rounded corners=3pt, align=center, minimum width=13.8cm, minimum height=0.9cm, fill=gray!8},
-        side/.style={rectangle, draw=black, rounded corners=3pt, align=center, minimum width=4cm, minimum height=1.05cm, fill=gray!4},
-        arrow/.style={->, >=stealth, thick}
-    ]
-        \node[layer] (web) {Web接口层：本地终端页面、用户门户、动作挑战接口、设备侧管理员API};
-        \node[layer, below=0.32cm of web] (biz) {业务层：注册校验、审核流、严格识别、活体融合、考勤规则、状态反馈};
-        \node[layer, below=0.32cm of biz] (camera) {采集与模型层：OpenCV摄像头、MJPEG推流、YuNet检测、SFace特征、OpenVINO活体推理};
-        \node[layer, below=0.32cm of camera] (data) {数据层：SQLite表结构、Repository封装、事务管理、索引与轻量迁移};
-        \node[layer, below=0.32cm of data] (config) {配置层：默认配置、env.json覆盖、模型路径、阈值、设备信息、Token};
-        \node[side, right=0.9cm of web] (win) {Windows管理端\\Tailscale访问};
-        \node[side, left=0.9cm of web] (browser) {浏览器用户\\注册与签到};
-        \draw[arrow] (config) -- (data);
-        \draw[arrow] (data) -- (camera);
-        \draw[arrow] (camera) -- (biz);
-        \draw[arrow] (biz) -- (web);
-        \draw[arrow] (browser) -- (web);
-        \draw[arrow] (win) -- (web);
-    \end{tikzpicture}}
-    \caption{系统总体架构}
-    \label{fig:system_architecture}
-\end{figure}
-
-图\ref{fig:system_architecture}中，配置层处于最底部，负责统一维护设备运行参数，包括摄像头分辨率、帧率、模型路径、识别阈值、活体检测阈值、考勤时间段、快照保留时间和管理员Token等。数据层基于SQLite实现本地持久化，负责建表、索引、事务和轻量迁移，上层业务不直接散落数据库连接代码，而是通过Repository完成读写。采集与模型层承担图像输入和视觉推理任务，包括摄像头读帧、MJPEG编码、YuNet人脸检测、SFace特征提取和OpenVINO活体推理。业务层把模型输出转化为系统决策，例如是否单人入镜、是否通过活体、是否达到相似度阈值、是否在考勤时间内、是否处于重复签到冷却期。Web接口层则面向不同使用对象提供页面和接口，包括本地终端页面、用户门户页面、动作挑战接口和管理员API。
-
-系统的实际部署方式如图\ref{fig:deployment_architecture}所示。树莓派端是系统的核心运行节点，连接USB摄像头并运行FastAPI服务，同时保存SQLite数据库、注册照和考勤快照。本地浏览器访问树莓派根路径进入终端识别页面；普通用户从非本地网络访问时进入用户门户；Windows管理端通过Tailscale网络调用树莓派暴露的管理员API。这样部署的好处是现场签到不依赖外部服务器，管理员又可以在不直接暴露公网端口的情况下远程完成审核和查询。
-
-\begin{figure}[H]
-    \centering
-    \resizebox{\textwidth}{!}{%
-    \begin{tikzpicture}[
-        node distance=0.8cm,
-        device/.style={rectangle, draw=black, rounded corners=4pt, align=center, minimum width=3.6cm, minimum height=1.05cm, fill=gray!8},
-        store/.style={cylinder, shape border rotate=90, draw=black, aspect=0.25, align=center, minimum width=1.7cm, minimum height=1cm, fill=gray!5},
-        arrow/.style={->, >=stealth, thick}
-    ]
-        \node[device] (camera) at (-5,0) {USB摄像头\\视频帧输入};
-        \node[device] (pi) at (0,0) {树莓派考勤终端\\FastAPI + OpenCV + OpenVINO};
-        \node[store] (db) at (0,-2.0) {SQLite\\face3.db};
-        \node[device] (terminal) at (-5,-2.0) {本地浏览器\\终端识别页};
-        \node[device] (portal) at (5,0) {普通用户浏览器\\门户注册/采集};
-        \node[device] (windows) at (5,-2.0) {Windows管理端\\Tailscale访问};
-        \draw[arrow] (camera) -- node[above]{OpenCV读帧} (pi);
-        \draw[arrow] (pi) -- node[right]{读写名单/人脸/考勤} (db);
-        \draw[arrow] (terminal) -- node[below]{/video\_feed与状态轮询} (pi);
-        \draw[arrow] (portal) -- node[above]{/portal与/api/liveness} (pi);
-        \draw[arrow] (windows) -- node[below]{/api/admin/*} (pi);
-    \end{tikzpicture}}
-    \caption{系统部署架构图}
-    \label{fig:deployment_architecture}
-\end{figure}
-
-图\ref{fig:deployment_architecture}还体现了系统的三个边界。第一是设备边界，摄像头、识别模型和SQLite数据库都位于树莓派端，现场考勤即使在Windows管理端离线时仍能继续运行。第二是访问边界，本地终端页面、普通用户门户和管理员API分别面向不同角色，系统通过访问路径和鉴权方式避免功能混淆。第三是网络边界，Windows端只通过Tailnet访问管理员API，不直接读写树莓派文件系统，也不嵌入终端识别线程，从而降低管理端故障对现场签到的影响。
-
-为了把上述架构转化为可理解的业务流程，图\ref{fig:business_closed_loop}给出了系统核心业务闭环。该图从成员名单导入开始，到管理员查询统计结束，覆盖了注册、审核、识别和考勤追溯的完整过程。相比只展示某个模型输入输出的流程图，这个闭环图更能说明本文系统类毕业设计的完整性：它不仅能识别人脸，还能控制谁可以注册、什么照片可以入库、什么人脸可以被终端加载、什么识别结果可以写入考勤记录。
-
-\begin{figure}[H]
-    \centering
-    \resizebox{\textwidth}{!}{%
+    \resizebox{0.96\textwidth}{!}{%
     \begin{tikzpicture}[
         node distance=0.9cm,
-        flowbox/.style={rectangle, draw=black, rounded corners=3pt, align=center, minimum width=2.35cm, minimum height=0.78cm, fill=gray!8},
+        flowbox/.style={rectangle, draw=black, rounded corners=3pt, align=center, minimum width=2.55cm, minimum height=0.78cm, fill=gray!8},
         decisionbox/.style={diamond, draw=black, aspect=2.1, align=center, inner sep=1pt, fill=gray!5},
         arrow/.style={->, >=stealth, thick}
     ]
-        \node[flowbox] (roster) {导入成员名单};
-        \node[flowbox, right=of roster] (register) {用户首次注册};
-        \node[flowbox, right=of register] (capture) {动作挑战采集};
-        \node[flowbox, right=of capture] (validation) {质量校验};
-        \node[decisionbox, right=of validation] (review) {管理员\\审核};
-        \node[flowbox, right=of review] (library) {进入识别人脸库};
-        \node[flowbox, below=1.2cm of library] (attendance) {终端识别签到};
-        \node[flowbox, left=of attendance] (record) {写入考勤记录};
-        \node[flowbox, left=of record] (query) {管理员查询统计};
-        \node[flowbox, below=1.2cm of review] (reject) {驳回并反馈原因};
+        \node[flowbox] (roster) {成员名单\\预置};
+        \node[flowbox, right=of roster] (register) {用户首次\\注册};
+        \node[flowbox, right=of register] (capture) {动作挑战\\采集};
+        \node[flowbox, right=of capture] (quality) {注册照\\质量校验};
+        \node[decisionbox, right=of quality] (review) {管理员\\审核};
+        \node[flowbox, right=of review] (library) {进入审核通过\\人脸库};
+        \node[flowbox, below=1.15cm of library] (recognize) {终端识别\\自动签到};
+        \node[flowbox, left=of recognize] (record) {考勤记录\\与快照};
+        \node[flowbox, left=of record] (query) {管理员查询\\与追溯};
+        \node[flowbox, below=1.15cm of review] (feedback) {驳回原因\\反馈用户};
+
         \draw[arrow] (roster) -- (register);
         \draw[arrow] (register) -- (capture);
-        \draw[arrow] (capture) -- (validation);
-        \draw[arrow] (validation) -- (review);
-        \draw[arrow] (review) -- node[above]{通过} (library);
-        \draw[arrow] (library) -- (attendance);
-        \draw[arrow] (attendance) -- (record);
-        \draw[arrow] (record) -- (query);
-        \draw[arrow] (review) -- node[right]{驳回} (reject);
-        \draw[arrow] (reject) -| (capture);
-    \end{tikzpicture}}
-    \caption{系统核心业务闭环流程图}
-    \label{fig:business_closed_loop}
-\end{figure}
-
-在图\ref{fig:business_closed_loop}中，注册审核链路和终端签到链路在\texttt{face\_profiles}表处汇合。注册端负责产生候选人脸档案，并通过动作挑战、质量校验和管理员审核控制档案质量；终端端只加载审核通过的档案，不关心注册过程中失败的样本，也不会让待审核照片立即参与考勤。这样的设计把“资料提交”和“现场识别”分开，使系统在业务上更接近真实考勤场景：用户可以自助提交资料，但资料是否生效必须经过管理端确认；现场终端可以高频识别，但它只使用已确认的数据。
-
-\section{注册审核与入库控制模型}
-
-注册审核框架的核心目标是保证进入识别库的数据来源可信、质量可控、责任可追溯。对于人脸考勤系统而言，入库阶段的错误会直接影响后续签到结果。如果用户可以随意上传照片，可能出现照片模糊、多人入镜、侧脸严重、用屏幕翻拍他人照片等问题；如果系统不设置审核状态，终端可能会立即加载未经确认的人脸档案，给管理员后续纠错带来困难。因此，本文在注册端设计了由名单准入、账号注册、动作挑战、质量校验和管理员审核组成的入库控制模型，如图\ref{fig:registration_framework}所示。
-
-\begin{figure}[H]
-    \centering
-    \resizebox{\textwidth}{!}{%
-    \begin{tikzpicture}[
-        node distance=0.85cm,
-        flowbox/.style={rectangle, draw=black, rounded corners=3pt, align=center, minimum width=2.45cm, minimum height=0.85cm, fill=gray!8},
-        datastore/.style={cylinder, shape border rotate=90, draw=black, aspect=0.25, align=center, minimum height=0.9cm, minimum width=1.5cm, fill=gray!5},
-        arrow/.style={->, >=stealth, thick}
-    ]
-        \node[datastore] (csv) {CSV\\名单};
-        \node[flowbox, right=of csv] (register) {首次注册\\改密};
-        \node[flowbox, right=of register] (challenge) {三步动作\\挑战};
-        \node[flowbox, right=of challenge] (quality) {质量校验\\冻结照片};
-        \node[flowbox, right=of quality] (review) {管理员\\审核};
-        \node[datastore, right=of review] (db) {SQLite\\人脸库};
-        \node[flowbox, below=1.05cm of quality] (feedback) {失败原因\\返回用户};
-        \draw[arrow] (csv) -- (register);
-        \draw[arrow] (register) -- (challenge);
-        \draw[arrow] (challenge) -- (quality);
+        \draw[arrow] (capture) -- (quality);
         \draw[arrow] (quality) -- (review);
-        \draw[arrow] (review) -- node[above]{通过} (db);
-        \draw[arrow] (challenge) |- (feedback);
-        \draw[arrow] (quality) -- (feedback);
-        \draw[arrow] (review) |- (feedback);
+        \draw[arrow] (review) -- node[above]{通过} (library);
+        \draw[arrow] (library) -- (recognize);
+        \draw[arrow] (recognize) -- (record);
+        \draw[arrow] (record) -- (query);
+        \draw[arrow] (review) -- node[right]{驳回} (feedback);
+        \draw[arrow] (feedback) -| (capture);
     \end{tikzpicture}}
-    \caption{注册审核框架}
-    \label{fig:registration_framework}
+    \caption{系统核心业务流程需求图}
+    \label{fig:requirement_business_flow}
 \end{figure}
 
-图\ref{fig:registration_framework}中的第一步是名单准入。系统通过\texttt{roster\_members}表保存管理员预置的成员姓名、编号、角色、状态和初始密码哈希。用户首次注册时必须输入姓名、学号或工号、初始密码、新密码和确认密码。系统先同步名单文件，再检查编号是否存在、名单状态是否为active、姓名是否与名单一致、初始密码是否正确，最后才允许写入正式账号。该设计使系统的注册入口不是完全开放的公网表单，而是以管理员预置名单为边界，避免无关人员自行创建账号。
-
-第二步是动作挑战。系统没有采用“上传一张照片后直接入库”的方式，而是在用户浏览器中创建动作挑战会话。挑战会话包含挑战ID、过期时间、动作步骤、已通过步骤和最终可信注册照等状态。当前动作模板为“正脸、向左或向右轻微转头、再回正脸”，其中侧转方向从预设模板中随机选择。每一步提交抓拍图后，后端都会解码图片、检测人脸、检查是否单人入镜、计算姿态指标，并与第一步通过的抓拍进行同人一致性比较。如果中途换人，系统会返回身份变化提示；如果动作幅度不符合当前步骤，系统会返回具体动作要求。三步全部通过后，系统从已通过抓拍中优先选择清晰度最高的正脸照片作为最终注册照，并在后端冻结该照片。正式提交时，系统只从动作挑战服务读取这张可信注册照，而不信任前端重新提交的任意图片。
-
-第三步是质量校验。动作挑战主要证明用户在现场按照要求完成了动作，但还不足以保证照片适合长期识别，因此系统进一步执行注册照质量校验。校验流水线首先构建统一上下文，包括原始图片、BGR图、RGB图、图像尺寸、人脸框和关键点。随后依次执行单人检测、人脸面积检测、Laplacian清晰度检测、亮度均值检测、关键点完整性检测、轻量姿态检测和翻拍风险检测。每个校验器只负责一种规则，并返回统一格式的结果，包括校验名称、是否通过、错误码、中文提示、分数和阈值。这样做的好处是前端可以把失败原因直接展示给用户，管理员也可以根据校验项理解照片为什么没有进入审核阶段。
-
-第四步是管理员审核。通过质量校验的照片并不会立即参与终端识别，而是以\texttt{pending}状态写入\texttt{face\_profiles}表。管理员在Windows管理端查看待审核档案，可以选择通过、驳回或重新置为待审核。审核通过后，档案状态变为\texttt{approved}，终端识别器下次重载人脸库时才会加载该档案；审核驳回后，系统记录驳回原因、备注、审核人和审核时间，并将记录写入驳回历史表。用户在个人中心可以看到最近人脸资料状态、审核原因和重新上传提示。通过这种方式，系统把用户自助提交和管理员最终确认结合起来，既减少管理员采集照片的工作量，又保留了考勤系统应有的审核控制。
-
-\section{终端识别与活体融合模型}
-
-终端识别模型面向树莓派本地签到场景，输入为摄像头实时帧，输出为识别状态和考勤写入信号。系统采用“检测、活体、特征、匹配、规则”的串联框架。设单帧输入图像为$I_t$，则系统对其执行如下处理：
-
-\begin{equation}
-    R_t = A(M(L(E(D(I_t)))))
-\end{equation}
-
-其中，$D(\cdot)$表示YuNet人脸检测\cite{wu2023yunet,opencv_facedetectoryn}，$E(\cdot)$表示SFace特征提取\cite{zhong2021sface,opencv_facerecognizersf}，$L(\cdot)$表示活体检测与重放风险判断，$M(\cdot)$表示身份匹配，$A(\cdot)$表示考勤规则判断。只有当所有门禁均通过时，$R_t$才被标记为可写入考勤记录。端侧识别流程如图\ref{fig:recognition_pipeline}所示。
-
-\begin{figure}[H]
-    \centering
-    \resizebox{\textwidth}{!}{%
-    \begin{tikzpicture}[
-        node distance=0.95cm,
-        flowbox/.style={rectangle, draw=black, rounded corners=3pt, align=center, minimum width=2.25cm, minimum height=0.85cm, fill=gray!7},
-        decisionbox/.style={diamond, draw=black, aspect=2.3, align=center, inner sep=1pt, fill=gray!5},
-        arrow/.style={->, >=stealth, thick}
-    ]
-        \node[flowbox] (frame) {摄像头帧};
-        \node[flowbox, right=of frame] (detect) {YuNet\\检测};
-        \node[decisionbox, right=of detect] (single) {单人\\入镜};
-        \node[flowbox, right=of single] (live) {活体\\检测};
-        \node[flowbox, right=of live] (feature) {SFace\\特征};
-        \node[flowbox, below=1cm of live] (reject) {拒绝签到\\返回提示};
-        \node[decisionbox, right=of feature] (match) {身份\\匹配};
-        \node[decisionbox, right=of match] (rule) {考勤\\规则};
-        \node[flowbox, right=of rule] (write) {写入记录\\保存快照};
-        \draw[arrow] (frame) -- (detect);
-        \draw[arrow] (detect) -- (single);
-        \draw[arrow] (single) -- node[above]{是} (live);
-        \draw[arrow] (live) -- (feature);
-        \draw[arrow] (feature) -- (match);
-        \draw[arrow] (match) -- node[above]{通过} (rule);
-        \draw[arrow] (rule) -- node[above]{通过} (write);
-        \draw[arrow] (single) |- node[left]{否} (reject);
-        \draw[arrow] (match) |- node[right]{失败} (reject);
-        \draw[arrow] (rule) |- node[right]{失败} (reject);
-    \end{tikzpicture}}
-    \caption{端侧识别流程}
-    \label{fig:recognition_pipeline}
-\end{figure}
-
-由图\ref{fig:recognition_pipeline}可知，系统并不是在检测到人脸后立即写入考勤。第一道门禁是人脸数量判断，画面中没有人脸时提示用户进入画面，出现多人时暂停签到，避免身份归属不清。第二道门禁是人脸质量判断，人脸区域过小时提示用户靠近摄像头，减少小脸裁剪导致的特征不稳定。第三道门禁是活体和翻拍风险判断，系统通过OpenVINO加载anti-spoof-mn3模型输出真人概率和伪造概率\cite{openvino,openvino_anti_spoof}，同时计算轻量重放风险信号。第四道门禁是身份匹配，系统只与审核通过的人脸档案进行比对。第五道门禁是考勤规则，包括考勤时间窗和重复签到冷却。只有这些门禁同时通过，识别结果才会变为\texttt{attendance\_ready}。
-
-身份匹配采用余弦相似度。设当前帧人脸特征为$q$，数据库中第$i$个已审核人脸特征为$k_i$，则相似度为：
-
-\begin{equation}
-    s_i = q \cdot k_i
-\end{equation}
-
-候选身份由最大相似度决定：
-
-\begin{equation}
-    i^* = \arg\max_i s_i
-\end{equation}
-
-当$s_{i^*} \geq 0.363$时，系统认为身份匹配通过。该阈值适用于本文测试时的小规模人脸库。为了降低相似样本带来的误识别风险，系统还会比较最高分和次高分之间的差距；如果两个候选身份过于接近，系统返回歧义匹配状态，要求用户重新正对摄像头。此外，终端识别还维护稳定帧计数和冷却时间。稳定帧计数用于避免瞬时匹配导致误签到；冷却时间用于避免同一用户在摄像头前停留时连续写入多条记录。
-
-活体检测部分采用模型分数和轻量风险信号融合。单帧模型输出真人概率$S_{\text{real}}$和伪造概率$S_{\text{spoof}}$，但单帧分数容易受到光照、模糊和裁剪边界影响，因此系统维护2秒滑动窗口。设窗口$W_t$中包含$M$个样本，则平均真人概率为：
-
-\begin{equation}
-    \bar{S}_{\text{real}}(W_t)=\frac{1}{M}\sum_{j=1}^{M}S_{\text{real}}^{(j)}
-\end{equation}
-
-除模型分数外，系统还计算屏幕重放风险。重放风险由频域风险、反光风险、边缘风险和矩形边框风险加权得到：
-
-\begin{equation}
-    R = 0.35R_{\text{freq}} + 0.25R_{\text{glare}} + 0.15R_{\text{edge}} + 0.25R_{\text{rect}}
-\end{equation}
-
-其中，频域风险用于捕捉屏幕刷新或周期纹理造成的高频异常，反光风险用于描述屏幕高亮低饱和区域，边缘风险用于描述屏幕边界或纸张边缘，矩形边框风险用于判断人脸周围是否存在明显显示设备边框。最终窗口判断规则如表\ref{tab:liveness_rule}所示。
-
-\begin{table}[H]
-    \centering
-    \caption{活体检测窗口判断规则}
-    \label{tab:liveness_rule}
-    \begin{tabularx}{\textwidth}{p{4cm}p{4cm}X}
-        \toprule
-        \textbf{判断项} & \textbf{当前配置} & \textbf{处理结果} \\
-        \midrule
-        单帧真人阈值 & $S_{\text{real}}\geq0.55$ & 当前帧记为活体可信。 \\
-        单帧灰区阈值 & $0.30\leq S_{\text{real}}<0.55$ & 纳入窗口，等待多帧稳定。 \\
-        低分累计次数 & 3次 & 达到上限后拒绝签到。 \\
-        窗口长度 & 2.0秒 & 统计窗口内平均真人概率和风险分数。 \\
-        窗口样本数 & 至少3帧 & 样本不足时提示继续保持正对摄像头。 \\
-        窗口真人阈值 & $\bar{S}_{\text{real}}\geq0.45$ & 作为多帧通过条件之一。 \\
-        重放风险阈值 & $R<0.72$ & 超过阈值时拒绝签到。 \\
-        \bottomrule
-    \end{tabularx}
-\end{table}
-
-表\ref{tab:liveness_rule}体现了终端端和注册端的差异。注册端可以要求用户完成动作挑战，因为注册流程只发生一次，用户可以接受相对完整的采集步骤；终端端面对的是高频签到场景，如果每次签到都要求用户做动作，会明显降低通行效率。因此终端端以被动活体检测和重放风险为主，在不增加额外操作的情况下提高照片、屏幕翻拍等攻击的识别能力。
-
-\section{数据库与接口协同设计}
-
-系统采用SQLite数据库\cite{sqlite}保存成员、用户、人脸档案、驳回历史和考勤记录。数据库设计的重点不是表数量，而是让数据状态能够表达真实业务过程。成员名单表表示“允许进入系统的人”；用户表表示“已经完成首次注册的人”；人脸档案表表示“用户提交过的人脸资料及审核状态”；驳回历史表表示“管理员为什么拒绝某次资料”；考勤记录表表示“某人在某时完成过一次签到”。这些表之间的关系如图\ref{fig:database_relation}所示。
-
-\begin{figure}[H]
-    \centering
-    \resizebox{\textwidth}{!}{%
-    \begin{tikzpicture}[
-        entity/.style={rectangle, draw=black, rounded corners=3pt, align=left, minimum width=3.2cm, minimum height=1.05cm, fill=gray!8},
-        arrow/.style={->, >=stealth, thick}
-    ]
-        \node[entity] (roster) at (-4,1.6) {\textbf{roster\_members}\\id, code, status};
-        \node[entity] (users) at (0,1.6) {\textbf{users}\\id, roster\_member\_id, code};
-        \node[entity] (faces) at (4,1.6) {\textbf{face\_profiles}\\id, user\_id, review\_status};
-        \node[entity] (reject) at (4,-0.6) {\textbf{face\_rejection\_history}\\user\_id, face\_profile\_id};
-        \node[entity] (attendance) at (0,-0.6) {\textbf{attendance\_records}\\user\_id, check\_time};
-        \node[entity] (meta) at (-4,-0.6) {\textbf{app\_meta}\\key, value};
-        \draw[arrow] (roster) -- node[above]{准入/激活} (users);
-        \draw[arrow] (users) -- node[above]{提交人脸} (faces);
-        \draw[arrow] (faces) -- node[right]{驳回记录} (reject);
-        \draw[arrow] (users) -- node[left]{签到流水} (attendance);
-        \draw[arrow] (users) |- (reject);
-        \draw[arrow] (meta) -- node[below]{迁移状态} (attendance);
-    \end{tikzpicture}}
-    \caption{核心数据表关系图}
-    \label{fig:database_relation}
-\end{figure}
-
-图\ref{fig:database_relation}中，成员名单是用户注册的准入来源，用户表是人脸档案和考勤记录的中心实体，人脸档案审核状态决定终端是否加载该档案。一个成员名单记录最多激活为一个用户账号，一个用户可以产生人脸档案和考勤记录，驳回历史同时关联用户和被驳回的人脸档案。应用元数据表不直接参与业务查询，而是记录轻量迁移状态，避免某些只应执行一次的历史数据处理被重复执行。核心表结构如表\ref{tab:data_model_detail}所示。
-
-\begin{table}[H]
-    \centering
-    \caption{核心数据表设计}
-    \label{tab:data_model_detail}
-    \begin{tabularx}{\textwidth}{p{3.1cm}p{4.7cm}X}
-        \toprule
-        \textbf{数据表} & \textbf{字段} & \textbf{设计说明} \\
-        \midrule
-        roster\_members & id, name, code, role, status, initial\_password\_hash, created\_at, updated\_at & 成员白名单表。code唯一，status控制成员是否允许继续使用系统，初始密码以哈希形式保存。 \\
-        users & id, roster\_member\_id, name, code, password\_hash, password\_changed\_at, last\_login\_at, created\_at & 用户账号表。与成员名单通过roster\_member\_id关联，password\_hash为空表示尚未完成首次注册。 \\
-        face\_profiles & id, user\_id, image\_path, encoding, review\_status, review\_reason\_codes, review\_comment, reviewed\_at, reviewed\_by, created\_at & 人脸档案表。保存注册照路径、特征向量和审核状态。review\_status取pending、approved、rejected。 \\
-        face\_rejection\_history & id, user\_id, face\_profile\_id, review\_reason\_codes, review\_comment, reviewed\_by, created\_at & 驳回历史表。记录近几次驳回原因，供用户中心和管理员端追溯。 \\
-        attendance\_records & id, user\_id, check\_type, check\_time, snapshot\_path, confidence & 考勤记录表。保存签到类型、签到时间、现场快照路径和识别置信度。 \\
-        app\_meta & key, value & 应用元数据表。用于记录轻量迁移状态，避免重复执行时间修正等迁移逻辑。 \\
-        \bottomrule
-    \end{tabularx}
-\end{table}
-
-表\ref{tab:data_model_detail}中的字段设计与系统流程相对应。成员名单表中的编号唯一约束保证同一学号或工号不会重复出现；用户表中的正式密码哈希和最近登录时间用于区分“名单存在但未注册”和“已经完成注册”的状态；人脸档案表中的\texttt{review\_status}是终端识别库加载的关键条件，只有\texttt{approved}档案会进入识别；驳回历史表保存原因码和备注，支持用户根据反馈重新拍摄；考勤记录表保存现场快照路径和识别置信度，便于管理员事后核查。系统还为成员状态、人脸档案用户ID、人脸审核状态、考勤用户ID、考勤时间和驳回历史用户ID建立索引，以支持管理员端按状态、日期、姓名和编号进行查询。
-
-接口设计与数据库设计保持一致，按访问对象分为用户门户接口、动作挑战接口、本地终端接口和管理员接口。用户门户接口依赖浏览器Session，适合普通用户登录后查看和提交自己的资料；本地终端接口只面向树莓派本地浏览器，主要提供视频流和识别状态；管理员接口面向Windows管理端，必须携带Token。接口分组如表\ref{tab:api_group_detail}所示。
-
-\begin{table}[H]
-    \centering
-    \caption{接口分组设计}
-    \label{tab:api_group_detail}
-    \begin{tabularx}{\textwidth}{p{3cm}p{4.2cm}p{3.2cm}X}
-        \toprule
-        \textbf{接口类别} & \textbf{典型路径} & \textbf{鉴权方式} & \textbf{主要功能} \\
-        \midrule
-        用户门户 & \texttt{/portal/*}, \texttt{/api/portal/*} & Session会话 & 首次注册、登录、用户中心、人脸资料提交、审核状态查看。 \\
-        动作挑战 & \texttt{/api/liveness/*} & Session会话 & 创建挑战、提交每一步抓拍、返回姿态与同人校验结果。 \\
-        本地终端 & \texttt{/}, \texttt{/video\_feed}, \texttt{/api/terminal/*} & 本地访问策略 & 展示实时视频流、识别进度、今日概况和现场公告。 \\
-        管理员接口 & \texttt{/api/admin/*} & Bearer Token & 设备状态、成员管理、用户管理、人脸审核、考勤查询、快照访问。 \\
-        \bottomrule
-    \end{tabularx}
-\end{table}
-
-管理员接口是Windows端和树莓派端之间的主要通信边界，其设计既要覆盖管理功能，也要避免Windows端越过HTTP边界直接操作树莓派文件系统。管理员接口细化如表\ref{tab:admin_api_detail_design}所示。
-
-\begin{table}[H]
-    \centering
-    \caption{管理员接口设计}
-    \label{tab:admin_api_detail_design}
-    \begin{tabularx}{\textwidth}{p{3.4cm}p{4.6cm}X}
-        \toprule
-        \textbf{接口组} & \textbf{接口} & \textbf{说明} \\
-        \midrule
-        设备状态 & GET /device/info；GET /device/health；GET /device/metrics；POST /device/reload-config & 查询设备身份、运行状态、数据库状态、摄像头状态、资源指标，并支持重新加载配置。 \\
-        成员名单 & GET /roster-members；POST /roster-members/sync；POST /roster-members；PUT /roster-members/\{id\} & 同步CSV名单，查询、新增和更新成员。成员编号用于约束首次注册。 \\
-        用户管理 & GET /users；GET /users/\{id\}；POST /users/\{id\}/status；POST /users/\{id\}/password/reset & 查看用户注册状态、人脸档案统计，支持停用成员和重置正式密码。 \\
-        人脸档案 & GET /face-profiles；GET /face-profiles/\{id\}；GET /face-profiles/\{id\}/image；POST /face-profiles/\{id\}/review；DELETE /face-profiles/\{id\} & 查询待审核、已通过、已驳回人脸档案，查看图片并提交审核结果。 \\
-        考勤记录 & GET /attendance；GET /attendance/today-summary；GET /attendance/\{id\}/snapshot & 按日期、姓名、编号查询考勤，获取今日汇总，查看签到快照。 \\
-        \bottomrule
-    \end{tabularx}
-\end{table}
-
-在安全边界上，系统根据访问来源控制页面入口。本地环回地址开放终端页、视频流和终端接口；非本地访问默认进入用户门户；管理员API独立开放，但必须携带\texttt{Authorization: Bearer <token>}请求头，也兼容\texttt{X-Admin-Token}。人脸图片和考勤快照不作为公开静态资源直接暴露，普通用户只能查看自己账号下的人脸图片，管理员也必须通过鉴权接口读取图片或快照。通过这种接口边界设计，系统既能满足用户自助注册、终端现场签到和管理员远程审核的需求，又能避免不同角色越权访问敏感数据。
+图\ref{fig:requirement_business_flow}体现了系统需求中的两个关键闭环。第一是注册审核闭环：用户提交人脸资料后，必须经过质量校验和管理员审核，审核驳回时需要向用户返回原因并允许重新采集。第二是考勤追溯闭环：审核通过的人脸档案进入终端识别库，终端识别成功后写入考勤记录并保存快照，管理员再通过远程接口查询和核查。只有同时满足这两个闭环，系统才能从“能识别人脸”扩展为“能支撑考勤管理”的完整应用。

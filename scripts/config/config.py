@@ -17,7 +17,7 @@ DEFAULT_CONFIG = {
     "camera_fps": 15,
     "camera_jpeg_quality": 94,
     "camera_fourcc": "MJPG",
-    "camera_overlay_font_path": "",
+    "camera_overlay_font_path": "static/vendor/fonts/noto-sans-sc-600.ttf",
     "camera_rotate": 0,
     "camera_mirror": False,
     "frame_resize_scale": 0.25,

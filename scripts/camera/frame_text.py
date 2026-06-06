@@ -12,7 +12,12 @@ from PIL import ImageFont
 from scripts.config.config import cfg
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 FONT_CANDIDATES = (
+    "static/vendor/fonts/noto-sans-sc-600.ttf",
+    "static/vendor/fonts/noto-sans-sc-500.ttf",
+    "static/vendor/fonts/noto-sans-sc-400.ttf",
     "static/fonts/NotoSansCJK-Regular.ttc",
     "static/fonts/NotoSansSC-Regular.otf",
     "static/fonts/SourceHanSansSC-Regular.otf",
@@ -22,6 +27,17 @@ FONT_CANDIDATES = (
     "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
 )
+
+
+def _resolve_path(path_text: str) -> Path:
+    """
+    把字体候选路径统一解析成绝对路径。
+    相对路径始终按项目根目录解析，避免服务从不同工作目录启动时找不到项目内字体。
+    """
+    path = Path(path_text)
+    if path.is_absolute():
+        return path
+    return (PROJECT_ROOT / path).resolve()
 
 
 def _bgr_to_rgb(color: tuple[int, int, int]) -> tuple[int, int, int]:
@@ -45,21 +61,65 @@ def resolve_font_path() -> Optional[str]:
     candidates.extend(FONT_CANDIDATES)
 
     for candidate in candidates:
-        path = Path(candidate)
+        path = _resolve_path(candidate)
         if path.exists() and path.is_file():
             return str(path)
     return None
 
 
-@lru_cache(maxsize=32)
-def _load_font(font_size: int):
-    font_path = resolve_font_path()
-    if font_path:
+def _font_mask_signature(font, character: str) -> tuple:
+    """
+    获取单个字符渲染后的掩码特征。
+    Pillow 遇到缺字时通常会绘制同一个 tofu 方框，用掩码特征可以识别并避开这类字体。
+    """
+    mask = font.getmask(character)
+    return mask.size, mask.getbbox(), bytes(mask)
+
+
+def _font_supports_text(font, text: str) -> bool:
+    """
+    判断字体是否覆盖待绘制文本。
+    如果某个字符的渲染结果和缺字方框一致，就认为该字体不适合绘制这段文字。
+    """
+    if not text:
+        return True
+
+    missing_signature = _font_mask_signature(font, "\uffff")
+    for character in text:
+        if character.isspace():
+            continue
+        if _font_mask_signature(font, character) == missing_signature:
+            return False
+    return True
+
+
+@lru_cache(maxsize=128)
+def _load_font(font_size: int, sample_text: str = ""):
+    """
+    按文本内容选择可用字体。
+    优先使用项目自带 Noto Sans SC；如果配置或系统字体缺字，会继续尝试后续候选，避免视频叠字出现方框。
+    """
+    configured_path = str(getattr(cfg, "camera_overlay_font_path", "") or "").strip()
+    candidates: list[str] = []
+    if configured_path:
+        candidates.append(configured_path)
+    candidates.extend(FONT_CANDIDATES)
+
+    first_loadable_font = None
+    for candidate in candidates:
+        font_path = _resolve_path(candidate)
+        if not font_path.exists() or not font_path.is_file():
+            continue
         try:
-            return ImageFont.truetype(font_path, size=max(int(font_size), 12))
+            font = ImageFont.truetype(str(font_path), size=max(int(font_size), 12))
         except Exception:
-            pass
-    return ImageFont.load_default()
+            continue
+        if first_loadable_font is None:
+            first_loadable_font = font
+        if _font_supports_text(font, sample_text):
+            return font
+
+    return first_loadable_font or ImageFont.load_default()
 
 
 def draw_text_items(
@@ -94,7 +154,7 @@ def draw_text_items(
         draw.text(
             xy=position,
             text=text,
-            font=_load_font(font_size),
+            font=_load_font(font_size, text),
             fill=fill,
             stroke_width=stroke_width,
             stroke_fill=stroke_fill,

@@ -1,0 +1,42 @@
+\contentsline {chapter}{摘\hskip 1em\relax 要}{i}{chapter*.1}%
+\contentsline {chapter}{ABSTRACT}{iii}{chapter*.2}%
+\contentsline {chapter}{\numberline {第1章\hspace {.3em}}绪论}{1}{chapter.1}%
+\contentsline {section}{\numberline {1.1}研究背景与意义}{1}{section.1.1}%
+\contentsline {section}{\numberline {1.2}国内外研究现状}{1}{section.1.2}%
+\contentsline {section}{\numberline {1.3}本文主要工作}{3}{section.1.3}%
+\contentsline {section}{\numberline {1.4}论文组织结构}{4}{section.1.4}%
+\contentsline {chapter}{\numberline {第2章\hspace {.3em}}毕业设计相关关键技术}{5}{chapter.2}%
+\contentsline {section}{\numberline {2.1}树莓派无头模式}{5}{section.2.1}%
+\contentsline {section}{\numberline {2.2}人脸检测与识别技术}{6}{section.2.2}%
+\contentsline {subsection}{\numberline {2.2.11}OpenCV YuNet 人脸检测模型}{6}{subsection.2.2.1}%
+\contentsline {subsection}{\numberline {2.2.22}OpenCV SFace 特征提取模型}{6}{subsection.2.2.2}%
+\contentsline {subsection}{\numberline {2.2.33}OpenVINO 活体检测技术}{8}{subsection.2.2.3}%
+\contentsline {section}{\numberline {2.3}FastAPI、Jinja2 与 Bootstrap}{9}{section.2.3}%
+\contentsline {section}{\numberline {2.4}SQLite 数据库}{9}{section.2.4}%
+\contentsline {section}{\numberline {2.5}Tailscale 远程管理网络}{10}{section.2.5}%
+\contentsline {chapter}{\numberline {第3章\hspace {.3em}}系统需求分析}{11}{chapter.3}%
+\contentsline {section}{\numberline {3.1}需求分析概述}{11}{section.3.1}%
+\contentsline {section}{\numberline {3.2}系统参与者与业务边界}{11}{section.3.2}%
+\contentsline {section}{\numberline {3.3}功能需求分析}{12}{section.3.3}%
+\contentsline {section}{\numberline {3.4}非功能需求分析}{13}{section.3.4}%
+\contentsline {chapter}{\numberline {第4章\hspace {.3em}}系统设计}{15}{chapter.4}%
+\contentsline {section}{\numberline {4.1}系统总体架构设计}{15}{section.4.1}%
+\contentsline {section}{\numberline {4.2}系统核心功能设计}{17}{section.4.2}%
+\contentsline {subsection}{\numberline {4.2.11}人脸注册审核}{17}{subsection.4.2.1}%
+\contentsline {subsection}{\numberline {4.2.22}树莓派端人脸识别与活体检测}{20}{subsection.4.2.2}%
+\contentsline {section}{\numberline {4.3}数据库与接口协同设计}{22}{section.4.3}%
+\contentsline {chapter}{\numberline {第5章\hspace {.3em}}系统功能实现与测试分析}{27}{chapter.5}%
+\contentsline {section}{\numberline {5.1}系统运行环境与配置}{27}{section.5.1}%
+\contentsline {subsection}{\numberline {5.1.11}树莓派硬件与系统环境}{27}{subsection.5.1.1}%
+\contentsline {subsection}{\numberline {5.1.22}树莓派后端配置}{28}{subsection.5.1.2}%
+\contentsline {subsection}{\numberline {5.1.33}树莓派前端配置}{29}{subsection.5.1.3}%
+\contentsline {subsection}{\numberline {5.1.44}Windows管理端配置}{29}{subsection.5.1.4}%
+\contentsline {section}{\numberline {5.2}配置管理与本地持久化实现}{30}{section.5.2}%
+\contentsline {section}{\numberline {5.3}用户门户与注册采集实现}{32}{section.5.3}%
+\contentsline {section}{\numberline {5.4}树莓派侧人脸识别与考勤写入实现}{36}{section.5.4}%
+\contentsline {section}{\numberline {5.5}管理员接口与远程管理实现}{38}{section.5.5}%
+\contentsline {section}{\numberline {5.6}测试过程与结果分析}{43}{section.5.6}%
+\contentsline {chapter}{结论}{47}{chapter*.37}%
+\contentsline {chapter}{参考文献}{49}{chapter*.38}%
+\contentsline {chapter}{攻读学士学位期间发表的论文和取得的科研成果}{55}{chapter*.40}%
+\contentsline {chapter}{致谢}{57}{chapter*.41}%
